@@ -11,6 +11,7 @@ import { scanLockfile, ScanError, summarize } from './api/client'
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TOKEN_KEY = 'mlab.apiToken'
+const PRIVACY_KEY = 'mlab.privacyConsent'
 
 let output: vscode.OutputChannel
 let ctx: vscode.ExtensionContext
@@ -54,6 +55,7 @@ async function checkLockfile(resource?: vscode.Uri): Promise<void> {
     )
     return
   }
+  if (!(await ensurePrivacyConsent())) return
 
   const filename = basenameOf(uri.fsPath)
   const format = detectFormat(uri.fsPath)
@@ -136,6 +138,32 @@ function handleScanError(err: unknown, filename: string, panel: ReportPanel): vo
   output.appendLine(`[error] ${filename}: ${message}`)
   panel.error(filename, `Unexpected error: ${message}`)
   vscode.window.showErrorMessage(`mlab: unexpected error scanning ${filename}. See the "mlab" output channel.`)
+}
+
+// ── First-scan privacy consent ───────────────────────────────────────────────
+// Shown once, before the very first network scan. The choice is remembered in
+// globalState so we never nag on later scans. Cancel aborts the scan.
+async function ensurePrivacyConsent(): Promise<boolean> {
+  if (ctx.globalState.get<boolean>(PRIVACY_KEY)) return true
+
+  const scanOnce = 'Scan now'
+  const always = "Scan and don't ask again"
+  const choice = await vscode.window.showInformationMessage(
+    'Scan this lockfile with vuln.mlab.sh?',
+    {
+      modal: true,
+      detail:
+        'The contents of the selected lockfile are uploaded to vuln.mlab.sh to resolve known CVEs. Only the lockfile is sent, never your source code. Nothing is uploaded until you trigger a scan.',
+    },
+    scanOnce,
+    always,
+  )
+
+  if (choice === always) {
+    await ctx.globalState.update(PRIVACY_KEY, true)
+    return true
+  }
+  return choice === scanOnce
 }
 
 // ── Token management (SecretStorage) ─────────────────────────────────────────

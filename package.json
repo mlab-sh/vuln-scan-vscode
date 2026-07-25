@@ -165,7 +165,7 @@
     "watch": "node esbuild.js --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "node --import tsx --test test/locate/*.test.ts",
+    "test": "node --import tsx --test test/*.test.ts",
     "package": "npm run typecheck && vsce package --no-dependencies",
     "vscode:prepublish": "npm run build"
   },
