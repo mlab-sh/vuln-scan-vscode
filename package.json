@@ -1,0 +1,186 @@
+{
+  "name": "vuln-scan",
+  "displayName": "vuln.mlab.sh SBOM scan",
+  "description": "Manually scan lockfiles for known CVEs via vuln.mlab.sh. No automatic scanning; you decide when a lockfile leaves your machine.",
+  "version": "0.1.0",
+  "publisher": "mlab-sh",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mlab-sh/vuln-scan-vscode.git"
+  },
+  "homepage": "https://vuln.mlab.sh",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Other"
+  ],
+  "keywords": [
+    "security",
+    "vulnerabilities",
+    "cve",
+    "sbom",
+    "lockfile"
+  ],
+  "icon": "resources/icon.png",
+  "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Scanning is disabled in Restricted Mode because it sends the lockfile's contents to vuln.mlab.sh. Trust this workspace to enable scanning."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "mlab.checkLockfile",
+        "title": "Check for lock vulnerabilities",
+        "category": "mlab"
+      },
+      {
+        "command": "mlab.scanWorkspace",
+        "title": "Scan all lockfiles in workspace",
+        "category": "mlab"
+      },
+      {
+        "command": "mlab.clearResults",
+        "title": "Clear results",
+        "category": "mlab",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "mlab.setToken",
+        "title": "Set API token",
+        "category": "mlab"
+      },
+      {
+        "command": "mlab.clearToken",
+        "title": "Clear API token",
+        "category": "mlab"
+      },
+      {
+        "command": "mlab.manageToken",
+        "title": "Manage API token & quota",
+        "category": "mlab"
+      },
+      {
+        "command": "mlab.rescan",
+        "title": "Rescan",
+        "category": "mlab",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "mlab.checkLockfile",
+          "when": "resourceFilename =~ /^(Cargo\\.lock|package-lock\\.json|npm-shrinkwrap\\.json|composer\\.lock|Gemfile\\.lock|go\\.sum|requirements\\.txt|mise\\.lock)$/i",
+          "group": "2_workspace@100"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "mlab.checkLockfile",
+          "when": "resourceFilename =~ /^(Cargo\\.lock|package-lock\\.json|npm-shrinkwrap\\.json|composer\\.lock|Gemfile\\.lock|go\\.sum|requirements\\.txt|mise\\.lock)$/i",
+          "group": "2_workspace@100"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "mlab.rescan",
+          "when": "view == mlab.findings",
+          "group": "navigation@1"
+        },
+        {
+          "command": "mlab.clearResults",
+          "when": "view == mlab.findings",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "mlab.rescan",
+          "when": "false"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mlab",
+          "title": "vuln.mlab.sh",
+          "icon": "resources/mlab-mono.png"
+        }
+      ]
+    },
+    "views": {
+      "mlab": [
+        {
+          "id": "mlab.findings",
+          "name": "Vulnerabilities",
+          "icon": "resources/mlab-mono.png",
+          "contextualTitle": "vuln.mlab.sh"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "mlab.findings",
+        "contents": "No scan has been run yet.\n\nScanning is manual by design. Nothing is sent to vuln.mlab.sh until you ask.\n\nRight-click a lockfile in the Explorer, or run a scan from here.\n[Check for lock vulnerabilities](command:mlab.checkLockfile)\n[Scan all lockfiles in workspace](command:mlab.scanWorkspace)\n\nAnonymous scans are limited to 8/hour. Add an API token for 25/hour.\n[Manage API token & quota](command:mlab.manageToken)\n\nSupported lockfiles: Cargo.lock, package-lock.json, npm-shrinkwrap.json, composer.lock, Gemfile.lock, go.sum, requirements.txt, mise.lock."
+      }
+    ],
+    "configuration": {
+      "title": "vuln.mlab.sh SBOM scan",
+      "properties": {
+        "mlab.apiUrl": {
+          "type": "string",
+          "default": "https://vuln.mlab.sh/api/v2/scan",
+          "markdownDescription": "Scan endpoint. Override this to point at a self-hosted vuln.mlab.sh instance."
+        },
+        "mlab.severityFloor": {
+          "type": "string",
+          "enum": [
+            "any",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "default": "any",
+          "markdownDescription": "Lowest severity that is reported as a Warning/Error diagnostic. Findings below this floor are downgraded to Information. This tunes the diagnostic severity mapping only; it never fails anything."
+        },
+        "mlab.timeoutMs": {
+          "type": "number",
+          "default": 30000,
+          "minimum": 1000,
+          "markdownDescription": "Per-request timeout in milliseconds for a scan."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js --production",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "node --import tsx --test test/locate/*.test.ts",
+    "package": "npm run typecheck && vsce package --no-dependencies",
+    "vscode:prepublish": "npm run build"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "@vscode/vsce": "^2.32.0",
+    "esbuild": "^0.23.1",
+    "eslint": "^8.57.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}

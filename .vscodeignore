@@ -1,0 +1,21 @@
+# Everything that is not needed at runtime in the packaged .vsix.
+# The published extension is the single bundled dist/extension.js plus resources.
+
+.vscode/**
+.github/**
+src/**
+test/**
+out/**
+node_modules/**
+
+esbuild.js
+tsconfig.json
+.eslintrc.json
+.gitignore
+.vscodeignore
+**/*.map
+**/*.ts
+**/tsconfig.json
+**/.eslintrc.json
+
+# keep: dist/**, resources/**, package.json, README.md, CHANGELOG.md, LICENSE
