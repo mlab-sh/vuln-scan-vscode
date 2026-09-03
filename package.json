@@ -210,7 +210,7 @@
             "critical"
           ],
           "default": "any",
-          "markdownDescription": "Lowest severity that is reported as a Warning/Error diagnostic. Findings below this floor are downgraded to Information. This tunes the diagnostic severity mapping only; it never fails anything."
+          "markdownDescription": "Lowest severity reported as a Warning or Error in the Problems panel. At or above this floor, critical and high are Errors and the rest are Warnings; below it, findings are downgraded to Information. This tunes the diagnostic severity mapping only; it never fails anything."
         },
         "mlab.timeoutMs": {
           "type": "number",

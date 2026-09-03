@@ -1,15 +1,16 @@
 import * as vscode from 'vscode'
 import * as fs from 'fs'
 import * as path from 'path'
-import { basenameOf, detectFormat, isSupportedLockfile } from './detect'
+import { basenameOf, detectFormat, isSupportedLockfile, SKIP_DIRS, SUPPORTED_BASENAMES } from './detect'
 import { ReportPanel } from './views/reportPanel'
 import { HomePanel, onSettingsWritten } from './views/homePanel'
 import { FindingsTree } from './views/findingsTree'
 import { LockfileDecorations } from './views/decorations'
 import { ScanCache, hashOf } from './cache'
 import { AutoScanner } from './autoscan'
+import { LockfileDiagnostics } from './diagnostics'
 import * as config from './config'
-import { scanLockfile, ScanError, summarize } from './api/client'
+import { scanLockfile, ScanError, summarize, ScanOutcome } from './api/client'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Non-negotiable rule: NOTHING is uploaded without the user's agreement.
@@ -30,6 +31,7 @@ let view: vscode.TreeView<unknown>
 let cache: ScanCache
 let decorations: LockfileDecorations
 let autoScanner: AutoScanner
+let diagnostics: LockfileDiagnostics
 
 export function activate(context: vscode.ExtensionContext): void {
   ctx = context
@@ -39,6 +41,9 @@ export function activate(context: vscode.ExtensionContext): void {
   tree = new FindingsTree()
   view = vscode.window.createTreeView('mlab.findings', { treeDataProvider: tree })
   context.subscriptions.push(view)
+
+  diagnostics = new LockfileDiagnostics()
+  context.subscriptions.push(diagnostics)
 
   cache = new ScanCache(context.globalState)
   decorations = new LockfileDecorations(cache)
@@ -54,10 +59,15 @@ export function activate(context: vscode.ExtensionContext): void {
   autoScanner.sync()
   // `.mlab` files live outside the VS Code config system, so the page tells us
   // directly when one is written.
-  onSettingsWritten(() => autoScanner.sync())
+  onSettingsWritten(() => {
+    autoScanner.sync()
+    void refreshDiagnostics()
+  })
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('mlab')) autoScanner.sync()
+      if (!e.affectsConfiguration('mlab')) return
+      autoScanner.sync()
+      void refreshDiagnostics()
     }),
   )
 
@@ -111,6 +121,7 @@ async function rehydrate(): Promise<void> {
     const entry = cache.peek(fsPath)
     if (!entry) continue
     tree.record(vscode.Uri.file(fsPath), entry.filename, entry.outcome)
+    await setDiagnosticsFor(vscode.Uri.file(fsPath), entry.outcome)
     restored++
   }
 
@@ -118,6 +129,28 @@ async function rehydrate(): Promise<void> {
   decorations.refresh()
   if (restored > 0) {
     output.appendLine(`[cache] restored ${restored} previous result(s) without scanning`)
+  }
+}
+
+/**
+ * Publish diagnostics for a lockfile we are not currently scanning, so it needs
+ * to read the file back. Failures are silent: a missing lockfile just means no
+ * squiggles, never an error popup.
+ */
+async function setDiagnosticsFor(uri: vscode.Uri, outcome: ScanOutcome): Promise<void> {
+  try {
+    const body = await vscode.workspace.fs.readFile(uri)
+    diagnostics.set(uri, Buffer.from(body).toString('utf8'), outcome)
+  } catch {
+    // The file is gone or unreadable; nothing to anchor a diagnostic on.
+  }
+}
+
+/** Re-publish every diagnostic, e.g. after `severityFloor` changed. */
+async function refreshDiagnostics(): Promise<void> {
+  for (const fsPath of cache.paths()) {
+    const entry = cache.peek(fsPath)
+    if (entry) await setDiagnosticsFor(vscode.Uri.file(fsPath), entry.outcome)
   }
 }
 
@@ -132,35 +165,34 @@ export function deactivate(): void {
   // Disposables are handled via context.subscriptions.
 }
 
-// ── Scan a single lockfile ───────────────────────────────────────────────────
+// ── The one scan primitive ───────────────────────────────────────────────────
+// Every caller goes through this: the command, the file watcher and the
+// workspace sweep. Keeping one implementation is what guarantees that the cache
+// is always consulted first and that consent is always checked before anything
+// leaves the machine.
+
 interface ScanOpts {
   /** True when the file watcher triggered this, not the user. */
   auto?: boolean
+  /** Suppresses the report panel and per file notifications (workspace sweep). */
+  batch?: boolean
+  /** Lets a batch caller cancel the whole run. */
+  signal?: AbortSignal
 }
 
-async function checkLockfile(resource?: vscode.Uri, opts: ScanOpts = {}): Promise<void> {
-  const auto = opts.auto === true
-  const uri = resource ?? vscode.window.activeTextEditor?.document.uri
-  if (!uri) {
-    vscode.window.showWarningMessage('mlab: open or right-click a lockfile to scan it.')
-    return
-  }
-  if (!isSupportedLockfile(uri.fsPath)) {
-    if (!auto) {
-      vscode.window.showWarningMessage(`mlab: "${basenameOf(uri.fsPath)}" is not a supported lockfile.`)
-    }
-    return
-  }
-  if (!vscode.workspace.isTrusted) {
-    if (!auto) {
-      vscode.window.showWarningMessage(
-        'mlab: scanning is disabled in Restricted Mode because it uploads the lockfile. Trust this workspace to scan.',
-      )
-    }
-    return
-  }
+type ScanResult =
+  | { kind: 'cached'; outcome: ScanOutcome }
+  | { kind: 'scanned'; outcome: ScanOutcome }
+  | { kind: 'skipped'; reason: 'unsupported' | 'untrusted' | 'no-consent' | 'unreadable' }
+  | { kind: 'failed'; error: unknown }
 
+async function performScan(uri: vscode.Uri, opts: ScanOpts): Promise<ScanResult> {
+  const auto = opts.auto === true
+  const quiet = auto || opts.batch === true
   const filename = basenameOf(uri.fsPath)
+
+  if (!isSupportedLockfile(uri.fsPath)) return { kind: 'skipped', reason: 'unsupported' }
+  if (!vscode.workspace.isTrusted) return { kind: 'skipped', reason: 'untrusted' }
 
   // Read first: the cache is keyed on content, so an unchanged lockfile costs
   // nothing at all, no consent prompt and no request.
@@ -168,92 +200,126 @@ async function checkLockfile(resource?: vscode.Uri, opts: ScanOpts = {}): Promis
   try {
     body = await vscode.workspace.fs.readFile(uri)
   } catch (err) {
-    if (!auto) vscode.window.showErrorMessage(`mlab: could not read ${filename}.`)
     output.appendLine(`[error] ${filename}: unreadable: ${err instanceof Error ? err.message : err}`)
-    return
+    return { kind: 'skipped', reason: 'unreadable' }
   }
   const hash = hashOf(body)
+  const text = Buffer.from(body).toString('utf8')
 
   const hit = cache.lookup(uri.fsPath, hash)
   if (hit) {
-    tree.record(uri, filename, hit.outcome)
-    syncView()
-    decorations.refresh(uri)
+    publish(uri, filename, text, hit.outcome)
     output.appendLine(`[cache] ${filename}: ${summarize(hit.outcome)} (unchanged since last scan)`)
-    if (!auto) ReportPanel.show(ctx.extensionUri).report(filename, hit.outcome)
-    return
+    return { kind: 'cached', outcome: hit.outcome }
   }
 
   // Only now does anything leave the machine, so this is where consent belongs.
-  // An automatic scan never shows the modal: if consent was not given already,
-  // it simply does nothing.
+  // An automatic scan never shows the modal: without prior consent it does
+  // nothing at all.
   if (auto) {
     if (!ctx.globalState.get<boolean>(PRIVACY_KEY)) {
       output.appendLine(`[auto] ${filename}: skipped, privacy consent not given yet`)
-      return
+      return { kind: 'skipped', reason: 'no-consent' }
     }
   } else if (!(await ensurePrivacyConsent())) {
-    return
+    return { kind: 'skipped', reason: 'no-consent' }
   }
 
-  const format = detectFormat(uri.fsPath)
-  const apiUrl = config.get('apiUrl')
-  const timeoutMs = config.get('timeoutMs')
-
-  // An automatic scan is silent: no report panel, no popups. Its results surface
-  // through the red mark in the Explorer, the findings tree and the output
-  // channel. Only a user triggered scan gets the panel.
-  const panel = auto ? undefined : ReportPanel.show(ctx.extensionUri)
+  const panel = quiet ? undefined : ReportPanel.show(ctx.extensionUri)
   panel?.loading(filename)
 
   const controller = new AbortController()
   panel?.onCancel(() => controller.abort())
-
-  const run = async (): Promise<void> => {
-    try {
-      const token = await ctx.secrets.get(TOKEN_KEY)
-      output.appendLine(
-        `[${auto ? 'auto' : 'scan'}] ${filename} → ${apiUrl}${token ? ' (token)' : ' (anonymous)'}`,
-      )
-
-      const outcome = await scanLockfile({
-        apiUrl,
-        filename,
-        format,
-        body,
-        token: token || undefined,
-        timeoutMs,
-        signal: controller.signal,
-      })
-
-      await cache.put(uri.fsPath, filename, hash, outcome)
-      tree.record(uri, filename, outcome)
-      syncView()
-      decorations.refresh(uri)
-      panel?.report(filename, outcome)
-
-      const line = summarize(outcome)
-      output.appendLine(`[${auto ? 'auto' : 'scan'}] ${filename}: ${line}`)
-      if (auto) return
-      if (outcome.findings.length === 0) {
-        vscode.window.showInformationMessage(`mlab: no known vulnerabilities in ${filename}.`)
-      } else {
-        vscode.window.showWarningMessage(`mlab: ${line} in ${filename}.`)
-      }
-    } catch (err) {
-      handleScanError(err, filename, panel, auto)
-    }
+  if (opts.signal) {
+    if (opts.signal.aborted) controller.abort()
+    else opts.signal.addEventListener('abort', () => controller.abort(), { once: true })
   }
+
+  const label = auto ? 'auto' : opts.batch ? 'sweep' : 'scan'
+  try {
+    const token = await ctx.secrets.get(TOKEN_KEY)
+    const apiUrl = config.get('apiUrl')
+    output.appendLine(`[${label}] ${filename} → ${apiUrl}${token ? ' (token)' : ' (anonymous)'}`)
+
+    const outcome = await scanLockfile({
+      apiUrl,
+      filename,
+      format: detectFormat(uri.fsPath),
+      body,
+      token: token || undefined,
+      timeoutMs: config.get('timeoutMs'),
+      signal: controller.signal,
+    })
+
+    await cache.put(uri.fsPath, filename, hash, outcome)
+    publish(uri, filename, text, outcome)
+    panel?.report(filename, outcome)
+    output.appendLine(`[${label}] ${filename}: ${summarize(outcome)}`)
+    return { kind: 'scanned', outcome }
+  } catch (err) {
+    handleScanError(err, filename, panel, quiet)
+    return { kind: 'failed', error: err }
+  }
+}
+
+/** Push one outcome to every surface that shows results. */
+function publish(uri: vscode.Uri, filename: string, text: string, outcome: ScanOutcome): void {
+  tree.record(uri, filename, outcome)
+  syncView()
+  decorations.refresh(uri)
+  diagnostics.set(uri, text, outcome)
+}
+
+// ── Scan a single lockfile ───────────────────────────────────────────────────
+async function checkLockfile(resource?: vscode.Uri, opts: ScanOpts = {}): Promise<void> {
+  const auto = opts.auto === true
+  const uri = resource ?? vscode.window.activeTextEditor?.document.uri
+  if (!uri) {
+    vscode.window.showWarningMessage('mlab: open or right-click a lockfile to scan it.')
+    return
+  }
+
+  const filename = basenameOf(uri.fsPath)
+  const go = async (): Promise<ScanResult> => performScan(uri, opts)
 
   // ProgressLocation.Window is the discreet status bar spinner, so an automatic
   // scan is visible if you look for it but never steals focus.
-  if (auto) {
-    await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Window, title: `mlab: checking ${filename}` },
-      run,
+  const result = auto
+    ? await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Window, title: `mlab: checking ${filename}` },
+        go,
+      )
+    : await go()
+
+  if (auto) return
+
+  if (result.kind === 'skipped') {
+    if (result.reason === 'unsupported') {
+      vscode.window.showWarningMessage(`mlab: "${filename}" is not a supported lockfile.`)
+    } else if (result.reason === 'untrusted') {
+      vscode.window.showWarningMessage(
+        'mlab: scanning is disabled in Restricted Mode because it uploads the lockfile. Trust this workspace to scan.',
+      )
+    } else if (result.reason === 'unreadable') {
+      vscode.window.showErrorMessage(`mlab: could not read ${filename}.`)
+    }
+    return
+  }
+  if (result.kind === 'failed') return
+
+  if (result.kind === 'cached') {
+    ReportPanel.show(ctx.extensionUri).report(
+      filename,
+      result.outcome,
+      cache.peek(uri.fsPath)?.at,
     )
+  }
+
+  const line = summarize(result.outcome)
+  if (result.outcome.findings.length === 0) {
+    vscode.window.showInformationMessage(`mlab: no known vulnerabilities in ${filename}.`)
   } else {
-    await run()
+    vscode.window.showWarningMessage(`mlab: ${line} in ${filename}.`)
   }
 }
 
@@ -302,6 +368,7 @@ async function clearResults(): Promise<void> {
   await cache.clearAll()
   syncView()
   decorations.refresh()
+  diagnostics.clear()
   output.appendLine(`[tree] results cleared (${paths.length} cached entr${paths.length === 1 ? 'y' : 'ies'} dropped)`)
 }
 
@@ -398,13 +465,120 @@ async function clearToken(): Promise<void> {
   vscode.window.showInformationMessage('mlab: API token cleared.')
 }
 
-// ── Placeholder (arrives with the tree view + diagnostics) ───────────────────
+// ── Scan every lockfile in the workspace ─────────────────────────────────────
+// Quota aware by construction. Cached lockfiles cost nothing, so the sweep first
+// works out how many files would actually hit the network and asks before
+// spending them: the anonymous budget is 8 scans an hour, 25 with a token.
 async function scanWorkspace(): Promise<void> {
-  const excludes = `**/{node_modules,vendor,target,dist,.git}/**`
-  const includes = `**/{Cargo.lock,package-lock.json,npm-shrinkwrap.json,composer.lock,Gemfile.lock,go.sum,requirements.txt,mise.lock}`
+  if (!vscode.workspace.isTrusted) {
+    vscode.window.showWarningMessage(
+      'mlab: scanning is disabled in Restricted Mode because it uploads the lockfile. Trust this workspace to scan.',
+    )
+    return
+  }
+
+  const includes = lockfileGlob()
+  const excludes = `**/{${SKIP_DIRS.join(',')}}/**`
   const found = await vscode.workspace.findFiles(includes, excludes)
-  const list = found.map((u) => basenameOf(u.fsPath)).join(', ') || '(none)'
-  const msg = `mlab (stub): found ${found.length} lockfile(s): ${list}`
-  output.appendLine(msg)
-  vscode.window.showInformationMessage(msg)
+  if (found.length === 0) {
+    vscode.window.showInformationMessage('mlab: no supported lockfile found in this workspace.')
+    return
+  }
+
+  // Split cached from not, so the confirmation names the real cost.
+  const fresh: vscode.Uri[] = []
+  const cached: vscode.Uri[] = []
+  for (const uri of found) {
+    let hit = false
+    try {
+      const body = await vscode.workspace.fs.readFile(uri)
+      hit = cache.lookup(uri.fsPath, hashOf(body)) !== undefined
+    } catch {
+      hit = false
+    }
+    if (hit) cached.push(uri)
+    else fresh.push(uri)
+  }
+
+  if (fresh.length > 1) {
+    const go = `Scan ${fresh.length}`
+    const cachedNote = cached.length ? ` ${cached.length} already cached and free.` : ''
+    const choice = await vscode.window.showWarningMessage(
+      `mlab: ${fresh.length} lockfiles need a fresh scan.${cachedNote} That spends ${fresh.length} of your hourly quota (8 anonymous, 25 with a token).`,
+      { modal: true },
+      go,
+    )
+    if (choice !== go) return
+  }
+
+  const order = [...cached, ...fresh]
+  let scanned = 0
+  let reused = 0
+  let vulnerable = 0
+  let stopped: string | undefined
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: 'mlab: scanning workspace',
+      cancellable: true,
+    },
+    async (progress, token) => {
+      const controller = new AbortController()
+      token.onCancellationRequested(() => controller.abort())
+
+      for (let i = 0; i < order.length; i++) {
+        if (token.isCancellationRequested) {
+          stopped = 'cancelled'
+          break
+        }
+        const uri = order[i]
+        const name = basenameOf(uri.fsPath)
+        progress.report({
+          message: `${name} (${i + 1}/${order.length})`,
+          increment: 100 / order.length,
+        })
+
+        const result = await performScan(uri, { batch: true, signal: controller.signal })
+        if (result.kind === 'cached') reused++
+        else if (result.kind === 'scanned') scanned++
+        else if (result.kind === 'skipped' && result.reason === 'no-consent') {
+          stopped = 'no-consent'
+          break
+        } else if (result.kind === 'failed') {
+          // A rate limit will hit every remaining file too, so stop rather than
+          // burn the rest of the run on the same error.
+          if (result.error instanceof ScanError && result.error.kind === 'rate-limit') {
+            stopped = 'rate-limit'
+            break
+          }
+        }
+        if (result.kind !== 'skipped' && result.kind !== 'failed') {
+          if (result.outcome.findings.length > 0) vulnerable++
+        }
+      }
+    },
+  )
+
+  const parts = [`${scanned} scanned`, `${reused} from cache`]
+  const line = `mlab: ${parts.join(', ')}. ${vulnerable} lockfile${vulnerable === 1 ? '' : 's'} with known vulnerabilities.`
+  output.appendLine(`[sweep] ${line}`)
+
+  if (stopped === 'rate-limit') {
+    vscode.window.showWarningMessage(`${line} Stopped early: hourly quota reached.`)
+  } else if (stopped === 'cancelled') {
+    vscode.window.showInformationMessage(`${line} Stopped: cancelled.`)
+  } else if (stopped === 'no-consent') {
+    output.appendLine('[sweep] stopped: privacy consent declined')
+  } else if (vulnerable > 0) {
+    vscode.window.showWarningMessage(line)
+  } else {
+    vscode.window.showInformationMessage(line)
+  }
 }
+
+/** Single source for the lockfile glob, derived from `KNOWN` in detect.ts. */
+function lockfileGlob(): string {
+  return `**/{${SUPPORTED_BASENAMES.join(',')}}`
+}
+

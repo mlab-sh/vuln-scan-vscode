@@ -7,6 +7,18 @@ All notable changes to this extension are documented here. The format is based o
 
 ### Added
 
+- Diagnostics in the Problems panel for every finding, anchored on the line of the
+  lockfile that declares the package. This is what `mlab.severityFloor` has always
+  described and never had: the setting was declared and documented, but no
+  `DiagnosticCollection` existed for it to tune. Republished when the floor changes.
+- `Scan all lockfiles in workspace` is implemented. It was a stub that only listed
+  what it found while being the most prominent entry point in the UI. It is quota
+  aware: cached lockfiles cost nothing, the confirmation names how many files need
+  a fresh scan, the run is cancellable, and it stops early on a rate limit instead
+  of spending the rest of the run on the same error.
+- 15 tests covering the severity floor mapping and the lockfile line location,
+  using the fixtures that had until now been referenced by no test at all.
+
 - Automatic rescanning when a lockfile's contents change (`mlab.autoScan`, on by
   default), debounced so a burst of writes costs one scan. Automatic scans are
   silent: they show a discreet status bar progress, never open the report panel
@@ -41,23 +53,11 @@ All notable changes to this extension are documented here. The format is based o
 - `Rescan` and `Clear results` are implemented and only appear once there are
   results to act on.
 
-### Fixed
-
-- Cached results were not restored when a folder was opened. The extension
-  declared no `activationEvents`, so it only activated on a command or when the
-  mlab view was opened, which meant a lockfile known to be vulnerable looked
-  clean until you scanned it again. It now activates on
-  `workspaceContains:` a supported lockfile, and restores the tree and the
-  Explorer marks from the cache with no network call.
-- Rehydration restored every cached entry regardless of project. The cache is
-  global, so opening one repository could list another one's findings. Entries
-  are now filtered to the folders actually open, and entries whose lockfile has
-  been deleted from an open folder are pruned.
-- Debugging was broken: `F5` ran the production build, which is minified and has
-  no sourcemap, so breakpoints in `src/**/*.ts` never bound. The launch config now
-  uses `npm: watch`, which emits sourcemaps and rebuilds on change.
-
 ### Changed
+
+- The scan path is now a single primitive shared by the command, the file watcher
+  and the workspace sweep, so the cache is always consulted first and consent is
+  always checked before anything leaves the machine, on every path.
 
 - **Behaviour change.** Earlier versions promised no automatic scanning at all.
   Scanning can now be automatic, but the guarantee that nothing is uploaded
@@ -75,6 +75,22 @@ All notable changes to this extension are documented here. The format is based o
 - References to `vuln.mlab.sh` as the host that receives a lockfile are kept
   verbatim in the privacy consent dialog, the API endpoint and the token page
   links, since those are factual disclosures rather than branding.
+
+### Fixed
+
+- Cached results were not restored when a folder was opened. The extension
+  declared no `activationEvents`, so it only activated on a command or when the
+  mlab view was opened, which meant a lockfile known to be vulnerable looked
+  clean until you scanned it again. It now activates on
+  `workspaceContains:` a supported lockfile, and restores the tree and the
+  Explorer marks from the cache with no network call.
+- Rehydration restored every cached entry regardless of project. The cache is
+  global, so opening one repository could list another one's findings. Entries
+  are now filtered to the folders actually open, and entries whose lockfile has
+  been deleted from an open folder are pruned.
+- Debugging was broken: `F5` ran the production build, which is minified and has
+  no sourcemap, so breakpoints in `src/**/*.ts` never bound. The launch config now
+  uses `npm: watch`, which emits sourcemaps and rebuilds on change.
 
 ## [0.1.0] - 2026-07-25
 

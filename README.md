@@ -59,6 +59,10 @@ with a **Cancel** button, then the final report.
 - Lockfiles with known vulnerabilities are **marked red in the Explorer**, with a
   badge for the worst severity. The mark is driven by the content-keyed cache, so
   it stays until the lockfile is actually patched.
+- **Diagnostics in the Problems panel**, one per finding, anchored on the line of
+  the lockfile that declares the package. `mlab.severityFloor` decides how they
+  read: at or above the floor, critical and high are Errors and the rest are
+  Warnings; below it, findings are downgraded to Information. Nothing ever fails.
 - **See vuln report** opens the last result for a lockfile straight from the
   cache, without any network call and without spending a scan. It is on the
   Explorer and editor context menus, and it is what clicking a lockfile in the
@@ -77,7 +81,11 @@ with a **Cancel** button, then the final report.
 `Gemfile.lock`, `go.sum`, `requirements.txt`, `mise.lock`.
 
 `Scan all lockfiles in workspace` walks the workspace with `workspace.findFiles`
-and skips `node_modules`, `vendor`, `target`, `dist`, and `.git`.
+and skips `node_modules`, `vendor`, `target`, `dist`, and `.git`. It is quota
+aware: lockfiles already in the cache cost nothing, and before spending anything
+it tells you how many files actually need a fresh scan and asks. The run shows
+progress, can be cancelled, and stops early if the hourly quota runs out rather
+than burning the remaining files on the same error.
 
 ## API token and quotas
 
