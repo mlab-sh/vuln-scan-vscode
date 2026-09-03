@@ -5,13 +5,22 @@ Scan your lockfiles for known CVEs from inside VS Code, on demand, powered by
 entirely server side: the extension only uploads the lockfile you pick and shows
 the result. No local database, no heavy dependencies.
 
-## Manual by design
+## Consent first, then automatic
 
-This extension **never scans on its own**. There is no file watcher, no scan on
-save, open, startup, or on a timer, and no network call happens when the
-extension activates. A lockfile leaves your machine only when **you** trigger a
-scan. The first time you scan, a dialog explains what is sent and asks for
-confirmation.
+Nothing is uploaded until you agree, once. The first scan opens a dialog that
+explains exactly what is sent and asks for confirmation, and **no network call
+happens when the extension activates**.
+
+After you have agreed, `mlab.autoScan` (on by default) rescans a lockfile when
+its contents change. Two things keep that cheap and predictable:
+
+- Results are **cached per file content**, so an unchanged lockfile is never
+  re-uploaded. A `npm install` that does not move any version costs nothing.
+- Writes are **debounced**, so a burst of edits to the same lockfile produces one
+  scan, not several.
+
+If you prefer the fully manual behaviour, set `mlab.autoScan` to `false` on the
+mlab page or in your settings. With it off there is no file watcher at all.
 
 ## How to scan
 
@@ -47,6 +56,13 @@ with a **Cancel** button, then the final report.
   short summary.
 - A progress state that is genuinely cancellable: cancelling aborts the in-flight
   HTTP request.
+- Lockfiles with known vulnerabilities are **marked red in the Explorer**, with a
+  badge for the worst severity. The mark is driven by the content-keyed cache, so
+  it stays until the lockfile is actually patched.
+- **See vuln report** opens the last result for a lockfile straight from the
+  cache, without any network call and without spending a scan. It is on the
+  Explorer and editor context menus, and it is what clicking a lockfile in the
+  findings tree does. The report says how old a cached result is.
 - An **mlab** entry in the Activity Bar holding the findings tree, grouped
   lockfile -> severity -> advisory, with a badge showing the total finding count.
   Clicking a lockfile opens it; clicking an advisory opens its CVE page.
@@ -89,8 +105,21 @@ previous results and offers to open the token page or add a token.
 
 ## Settings
 
+Settings resolve through four layers, highest priority first:
+
+1. `<workspace>/.mlab/config.json`, meant to be committed so a team shares one
+   configuration
+2. `~/.mlab/config.json`, personal and applying to every workspace
+3. VS Code settings under `mlab.*`, which is what earlier versions used and which
+   keeps working
+4. built in defaults
+
+The mlab page shows which layer each value came from and lets you edit it, and
+the native settings editor stays one click away.
+
 | Setting | Default | Description |
 | --- | --- | --- |
+| `mlab.autoScan` | `true` | Rescan a lockfile when its contents change. Never uploads anything before you have consented once. |
 | `mlab.apiUrl` | `https://vuln.mlab.sh/api/v2/scan` | Scan endpoint. Override for a self-hosted instance. |
 | `mlab.severityFloor` | `any` | Lowest severity reported as a Warning/Error diagnostic; below it, findings are shown as Information. Tunes severity mapping only, never fails anything. |
 | `mlab.timeoutMs` | `30000` | Per-request timeout in milliseconds. |

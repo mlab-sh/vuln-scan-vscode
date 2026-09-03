@@ -111,9 +111,11 @@ export class FindingsTree implements vscode.TreeDataProvider<Node> {
         )
         item.iconPath = vscode.ThemeIcon.File
         item.contextValue = 'mlab.file'
+        // The tree is the findings surface, so a click shows the report rather
+        // than the raw lockfile. Opening the file itself is on the context menu.
         item.command = {
-          command: 'vscode.open',
-          title: 'Open lockfile',
+          command: 'mlab.showReport',
+          title: 'See vuln report',
           arguments: [rec.uri],
         }
       }

@@ -1,7 +1,7 @@
 {
   "name": "vuln-scan",
   "displayName": "mlab security",
-  "description": "Manual, on demand CVE scanning for your lockfiles, powered by mlab. No automatic scanning; you decide when a lockfile leaves your machine.",
+  "description": "CVE scanning for your lockfiles, powered by mlab. Nothing is uploaded until you agree once; after that, changed lockfiles are rescanned automatically and results are cached per content.",
   "version": "0.1.0",
   "publisher": "mlab-sh",
   "license": "MIT",
@@ -26,6 +26,9 @@
   ],
   "icon": "resources/icon.png",
   "main": "./dist/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/{Cargo.lock,package-lock.json,npm-shrinkwrap.json,composer.lock,Gemfile.lock,go.sum,requirements.txt,mise.lock}"
+  ],
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
@@ -38,6 +41,12 @@
         "command": "mlab.checkLockfile",
         "title": "Check for lock vulnerabilities",
         "category": "mlab"
+      },
+      {
+        "command": "mlab.showReport",
+        "title": "See vuln report",
+        "category": "mlab",
+        "icon": "$(output)"
       },
       {
         "command": "mlab.scanWorkspace",
@@ -76,10 +85,20 @@
         "title": "Rescan",
         "category": "mlab",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "mlab.openLockfile",
+        "title": "Open lockfile",
+        "category": "mlab"
       }
     ],
     "menus": {
       "explorer/context": [
+        {
+          "command": "mlab.showReport",
+          "when": "resourceFilename =~ /^(Cargo\\.lock|package-lock\\.json|npm-shrinkwrap\\.json|composer\\.lock|Gemfile\\.lock|go\\.sum|requirements\\.txt|mise\\.lock)$/i",
+          "group": "2_workspace@99"
+        },
         {
           "command": "mlab.checkLockfile",
           "when": "resourceFilename =~ /^(Cargo\\.lock|package-lock\\.json|npm-shrinkwrap\\.json|composer\\.lock|Gemfile\\.lock|go\\.sum|requirements\\.txt|mise\\.lock)$/i",
@@ -87,6 +106,11 @@
         }
       ],
       "editor/context": [
+        {
+          "command": "mlab.showReport",
+          "when": "resourceFilename =~ /^(Cargo\\.lock|package-lock\\.json|npm-shrinkwrap\\.json|composer\\.lock|Gemfile\\.lock|go\\.sum|requirements\\.txt|mise\\.lock)$/i",
+          "group": "2_workspace@99"
+        },
         {
           "command": "mlab.checkLockfile",
           "when": "resourceFilename =~ /^(Cargo\\.lock|package-lock\\.json|npm-shrinkwrap\\.json|composer\\.lock|Gemfile\\.lock|go\\.sum|requirements\\.txt|mise\\.lock)$/i",
@@ -114,6 +138,27 @@
         {
           "command": "mlab.rescan",
           "when": "false"
+        },
+        {
+          "command": "mlab.openLockfile",
+          "when": "false"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "mlab.showReport",
+          "when": "view == mlab.findings && viewItem == mlab.file",
+          "group": "inline@1"
+        },
+        {
+          "command": "mlab.openLockfile",
+          "when": "view == mlab.findings && viewItem == mlab.file",
+          "group": "1_open@1"
+        },
+        {
+          "command": "mlab.checkLockfile",
+          "when": "view == mlab.findings && viewItem == mlab.file",
+          "group": "1_open@2"
         }
       ]
     },
@@ -139,12 +184,17 @@
     "viewsWelcome": [
       {
         "view": "mlab.findings",
-        "contents": "No scan has been run yet.\n\nScanning is manual by design. Nothing is sent to vuln.mlab.sh until you ask.\n\nRight-click a lockfile in the Explorer, or start from here.\n[Check for lock vulnerabilities](command:mlab.checkLockfile)\n[Scan all lockfiles in workspace](command:mlab.scanWorkspace)\n\nQuota, API token and settings live on the mlab page.\n[Open mlab](command:mlab.openHome)\n\nSupported lockfiles: Cargo.lock, package-lock.json, npm-shrinkwrap.json, composer.lock, Gemfile.lock, go.sum, requirements.txt, mise.lock."
+        "contents": "No scan has been run yet.\n\nNothing is sent to vuln.mlab.sh until you agree once. After that, lockfiles are rescanned automatically when their contents change, and unchanged files are served from cache.\n\nRight-click a lockfile in the Explorer, or start from here.\n[Check for lock vulnerabilities](command:mlab.checkLockfile)\n[Scan all lockfiles in workspace](command:mlab.scanWorkspace)\n\nQuota, API token and settings live on the mlab page.\n[Open mlab](command:mlab.openHome)\n\nSupported lockfiles: Cargo.lock, package-lock.json, npm-shrinkwrap.json, composer.lock, Gemfile.lock, go.sum, requirements.txt, mise.lock."
       }
     ],
     "configuration": {
       "title": "mlab security",
       "properties": {
+        "mlab.autoScan": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Rescan a lockfile automatically when its contents change. Results are cached per file content, so an unchanged lockfile is never re-uploaded. Nothing is ever uploaded before you have accepted the one time privacy prompt, so this setting produces no network traffic until then."
+        },
         "mlab.apiUrl": {
           "type": "string",
           "default": "https://vuln.mlab.sh/api/v2/scan",

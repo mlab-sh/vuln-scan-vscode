@@ -72,11 +72,12 @@ export class ReportPanel {
     this.panel.webview.html = loadingHtml(filename, this.opts())
   }
 
-  report(filename: string, outcome: ScanOutcome): void {
+  /** `scannedAt` is set when the report comes from the cache, not a live scan. */
+  report(filename: string, outcome: ScanOutcome, scannedAt?: number): void {
     if (this.disposed) return
     this.cancelHandler = undefined
     this.panel.title = `Report · ${filename}`
-    this.panel.webview.html = reportHtml(filename, outcome, this.opts())
+    this.panel.webview.html = reportHtml(filename, outcome, this.opts(), scannedAt)
   }
 
   error(filename: string, message: string, kind?: ScanErrorKind): void {

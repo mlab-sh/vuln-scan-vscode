@@ -60,7 +60,23 @@ export function loadingHtml(filename: string, opts: RenderOpts): string {
   return shell(body, opts, script)
 }
 
-export function reportHtml(filename: string, outcome: ScanOutcome, opts: RenderOpts): string {
+/** Coarse "how old is this" label, good enough for a staleness hint. */
+function agoLabel(ms: number): string {
+  const mins = Math.floor((Date.now() - ms) / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`
+  const days = Math.floor(hours / 24)
+  return `${days} day${days === 1 ? '' : 's'} ago`
+}
+
+export function reportHtml(
+  filename: string,
+  outcome: ScanOutcome,
+  opts: RenderOpts,
+  scannedAt?: number,
+): string {
   const { findings, unresolved, deps, truncated } = outcome
   const summary = summarize(outcome)
   const clean = findings.length === 0
@@ -72,6 +88,13 @@ export function reportHtml(filename: string, outcome: ScanOutcome, opts: RenderO
     .join('')
 
   const banners: string[] = []
+  if (scannedAt !== undefined) {
+    banners.push(
+      `<div class="banner info"><span>&#8505;</span><span>Cached result, scanned ${esc(
+        agoLabel(scannedAt),
+      )}. The lockfile has not changed since, so nothing was re-uploaded.</span></div>`,
+    )
+  }
   if (truncated) {
     banners.push(
       `<div class="banner warn"><span>&#9888;</span><span>This manifest exceeds the 512 package scan ceiling; only the first 512 packages were scanned.</span></div>`,
@@ -120,7 +143,7 @@ export function reportHtml(filename: string, outcome: ScanOutcome, opts: RenderO
    ${hero}
    ${banners.join('')}
    ${table}
-   <footer class="muted small">${deps} dependenc${deps === 1 ? 'y' : 'ies'} scanned. Manual scan by design.</footer>`
+   <footer class="muted small">${deps} dependenc${deps === 1 ? 'y' : 'ies'} scanned. Nothing is uploaded without your agreement.</footer>`
   return shell(body, opts)
 }
 

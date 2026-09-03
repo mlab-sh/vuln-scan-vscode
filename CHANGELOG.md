@@ -7,6 +7,30 @@ All notable changes to this extension are documented here. The format is based o
 
 ### Added
 
+- Automatic rescanning when a lockfile's contents change (`mlab.autoScan`, on by
+  default), debounced so a burst of writes costs one scan. Automatic scans are
+  silent: they show a discreet status bar progress, never open the report panel
+  and never raise a notification, since the Explorer mark and the findings tree
+  already carry the result.
+- `mlab: See vuln report`, which opens the stored result for a lockfile from the
+  cache with no network call and no quota cost. Available on the Explorer and
+  editor context menus and by clicking a lockfile in the findings tree. The
+  report shows how old a cached result is.
+- The findings tree is rehydrated from the cache on startup, so it agrees with
+  the Explorer marks after a window reload instead of coming back empty.
+- Persistent scan cache keyed by the SHA-256 of the lockfile's bytes. An
+  unchanged lockfile is served from cache and never re-uploaded, which is what
+  makes automatic scanning affordable against an 8 scans/hour anonymous quota.
+  Entries older than 7 days are rescanned so new advisories are eventually seen.
+- Lockfiles with known vulnerabilities are marked red in the Explorer with a
+  severity badge, driven by the cache, so a file stays marked until it is
+  actually patched rather than until the window is closed.
+- Layered configuration: `<workspace>/.mlab/config.json`, then
+  `~/.mlab/config.json`, then VS Code `mlab.*` settings, then defaults. The mlab
+  page edits these and shows which layer each value came from.
+- The mlab page now edits every setting inline, with a User/Workspace target
+  selector and a per setting Reset.
+
 - Findings tree in the sidebar, grouped lockfile -> severity -> advisory. Clicking
   a lockfile opens it, clicking an advisory opens its vuln.mlab.sh page. The view
   carries a badge with the total finding count.
@@ -19,12 +43,28 @@ All notable changes to this extension are documented here. The format is based o
 
 ### Fixed
 
+- Cached results were not restored when a folder was opened. The extension
+  declared no `activationEvents`, so it only activated on a command or when the
+  mlab view was opened, which meant a lockfile known to be vulnerable looked
+  clean until you scanned it again. It now activates on
+  `workspaceContains:` a supported lockfile, and restores the tree and the
+  Explorer marks from the cache with no network call.
+- Rehydration restored every cached entry regardless of project. The cache is
+  global, so opening one repository could list another one's findings. Entries
+  are now filtered to the folders actually open, and entries whose lockfile has
+  been deleted from an open folder are pruned.
 - Debugging was broken: `F5` ran the production build, which is minified and has
   no sourcemap, so breakpoints in `src/**/*.ts` never bound. The launch config now
   uses `npm: watch`, which emits sourcemaps and rebuilds on change.
 
 ### Changed
 
+- **Behaviour change.** Earlier versions promised no automatic scanning at all.
+  Scanning can now be automatic, but the guarantee that nothing is uploaded
+  without agreement is unchanged and now enforced in one place: every path to the
+  network goes through the privacy consent, so the watcher produces no traffic
+  until you have accepted once. `activate()` still makes zero network calls. Set
+  `mlab.autoScan` to `false` to restore the fully manual behaviour.
 - Rebranded around **mlab** rather than the vuln.mlab.sh product name: display
   name is now `mlab security`, the Activity Bar container and the webview
   wordmark read `mlab`, and the report and token panels are titled `mlab scan

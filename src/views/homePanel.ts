@@ -2,6 +2,7 @@ import * as vscode from 'vscode'
 import { MLAB_CSS } from './theme'
 import { esc } from './reportHtml'
 import { SUPPORTED_BASENAMES } from '../detect'
+import * as config from '../config'
 
 // The full width mlab home, opened in the editor area rather than the sidebar.
 // The Activity Bar icon can only ever open a sidebar, so the sidebar holds the
@@ -19,17 +20,33 @@ import { SUPPORTED_BASENAMES } from '../detect'
 
 const TOKEN_KEY = 'mlab.apiToken'
 
+/**
+ * Called after any settings write. `.mlab` files are outside the VS Code
+ * configuration system, so `onDidChangeConfiguration` does not fire for them and
+ * the watcher has to be told explicitly.
+ */
+let autoScanChanged: () => void = () => {}
+export function onSettingsWritten(fn: () => void): void {
+  autoScanChanged = fn
+}
+
 /** The `mlab.*` settings rendered inline on the page, in display order. */
 interface SettingDesc {
   key: string
   label: string
-  kind: 'string' | 'enum' | 'number'
+  kind: 'string' | 'enum' | 'number' | 'boolean'
   hint: string
   options?: string[]
   min?: number
 }
 
 const SETTINGS: SettingDesc[] = [
+  {
+    key: 'autoScan',
+    label: 'Scan automatically on change',
+    kind: 'boolean',
+    hint: 'Rescan a lockfile when its contents change. Results are cached per content, so an unchanged file is never re-uploaded, and nothing is uploaded at all before you accept the privacy prompt.',
+  },
   {
     key: 'apiUrl',
     label: 'Scan endpoint',
@@ -53,7 +70,7 @@ const SETTINGS: SettingDesc[] = [
 ]
 
 /** Where a value currently comes from, so the page can say so out loud. */
-type Origin = 'default' | 'user' | 'workspace'
+type Origin = config.Layer
 
 interface SettingState {
   desc: SettingDesc
@@ -99,25 +116,12 @@ export class HomePanel {
     return (vscode.workspace.workspaceFolders?.length ?? 0) > 0
   }
 
-  /** Current value of each setting plus where it comes from. */
+  /** Current value of each setting plus which layer it came from. */
   private readSettings(): SettingState[] {
-    const cfg = vscode.workspace.getConfiguration('mlab')
     return SETTINGS.map((desc) => {
-      const info = cfg.inspect(desc.key)
-      const origin: Origin =
-        info?.workspaceValue !== undefined
-          ? 'workspace'
-          : info?.globalValue !== undefined
-            ? 'user'
-            : 'default'
-      return { desc, value: cfg.get(desc.key), origin }
+      const r = config.resolve(desc.key as keyof config.MlabConfig)
+      return { desc, value: r.value, origin: r.layer }
     })
-  }
-
-  private target(): vscode.ConfigurationTarget {
-    return this.scope === 'workspace' && this.hasWorkspace
-      ? vscode.ConfigurationTarget.Workspace
-      : vscode.ConfigurationTarget.Global
   }
 
   static async show(context: vscode.ExtensionContext): Promise<void> {
@@ -189,21 +193,22 @@ export class HomePanel {
           await this.render()
           break
         }
-        await vscode.workspace
-          .getConfiguration('mlab')
-          .update(desc.key, parsed, this.target())
+        try {
+          config.write(desc.key as keyof config.MlabConfig, parsed as never, this.scope)
+        } catch (err) {
+          vscode.window.showWarningMessage(
+            `mlab: ${err instanceof Error ? err.message : 'could not write the config file.'}`,
+          )
+        }
+        autoScanChanged()
         await this.render()
         break
       }
       case 'resetConfig': {
         const desc = SETTINGS.find((d) => d.key === msg.key)
         if (!desc) break
-        const cfg = vscode.workspace.getConfiguration('mlab')
-        // Clear both targets so the row genuinely returns to the default.
-        await cfg.update(desc.key, undefined, vscode.ConfigurationTarget.Global)
-        if (this.hasWorkspace) {
-          await cfg.update(desc.key, undefined, vscode.ConfigurationTarget.Workspace)
-        }
+        await config.reset(desc.key as keyof config.MlabConfig)
+        autoScanChanged()
         await this.render()
         break
       }
@@ -212,6 +217,7 @@ export class HomePanel {
 
   /** Validate and convert a raw webview value, or undefined when it is invalid. */
   private coerce(desc: SettingDesc, raw: unknown): unknown {
+    if (desc.kind === 'boolean') return raw === true || raw === 'true'
     if (desc.kind === 'number') {
       const n = Number(raw)
       if (!Number.isFinite(n)) return undefined
@@ -243,7 +249,9 @@ export class HomePanel {
     const { desc, value, origin } = st
     const id = `set-${desc.key}`
     let control: string
-    if (desc.kind === 'enum') {
+    if (desc.kind === 'boolean') {
+      control = `<label class="switch"><input id="${id}" data-key="${desc.key}" data-kind="boolean" class="ctl" type="checkbox"${value ? ' checked' : ''} /><span>${value ? 'Enabled' : 'Disabled'}</span></label>`
+    } else if (desc.kind === 'enum') {
       const opts = (desc.options ?? [])
         .map((o) => `<option value="${esc(o)}"${o === value ? ' selected' : ''}>${esc(o)}</option>`)
         .join('')
@@ -256,7 +264,7 @@ export class HomePanel {
     const badge =
       origin === 'default'
         ? `<span class="origin def">default</span>`
-        : `<span class="origin set">${origin}</span>`
+        : `<span class="origin set">${esc(config.layerLabel(origin))}</span>`
     const reset =
       origin === 'default'
         ? ''
@@ -323,9 +331,8 @@ export class HomePanel {
       <li>Open <a id="tokens-link" href="#">vuln.mlab.sh/me/tokens</a> and generate a personal token.</li>
       <li>Paste it below and click <em>Save token</em>.</li>
     </ol>
-    <label for="token" class="lbl">API token</label>
     <div class="row">
-      <input id="token" type="password" placeholder="${hasToken ? 'A token is already set' : 'Paste your token'}" autocomplete="off" spellcheck="false" />
+      <input id="token" type="password" aria-label="API token" placeholder="${hasToken ? 'A token is already set' : 'Paste your token'}" autocomplete="off" spellcheck="false" />
       <button id="reveal" class="btn ghost" type="button" title="Show or hide">&#128065;</button>
     </div>
     <div class="actions">
@@ -375,9 +382,12 @@ export class HomePanel {
     vscode.postMessage({ type: 'resetConfig', key: b.dataset.key });
   }));
   document.querySelectorAll('.ctl').forEach((el) => {
-    const send = () => vscode.postMessage({ type: 'setConfig', key: el.dataset.key, value: el.value });
-    // Selects commit immediately; text and number commit on blur or Enter.
-    if (el.tagName === 'SELECT') el.addEventListener('change', send);
+    const isBool = el.dataset.kind === 'boolean';
+    const send = () => vscode.postMessage({
+      type: 'setConfig', key: el.dataset.key, value: isBool ? el.checked : el.value,
+    });
+    // Checkboxes and selects commit immediately; text and number on blur or Enter.
+    if (isBool || el.tagName === 'SELECT') el.addEventListener('change', send);
     else {
       el.addEventListener('blur', send);
       el.addEventListener('keydown', (e) => { if (e.key === 'Enter') el.blur(); });
@@ -416,8 +426,7 @@ section p { margin: 0 0 10px; }
 .status.anon .dot { background: #f59e0b; box-shadow: 0 0 8px #f59e0b; }
 .steps { padding-left: 20px; color: var(--vscode-descriptionForeground); margin: 8px 0; }
 .steps li { margin: 3px 0; }
-.lbl { display: block; margin: 16px 0 6px; font-family: var(--mlab-mono); font-size: 0.72em; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--vscode-descriptionForeground); }
-.row { display: flex; gap: 8px; }
+.row { display: flex; gap: 8px; margin-top: 14px; }
 input {
   flex: 1; padding: 9px 12px; border-radius: var(--mlab-radius-sm); font-family: var(--mlab-mono);
   color: var(--vscode-input-foreground);
@@ -457,6 +466,9 @@ footer { margin-top: 34px; padding-top: 16px; border-top: var(--mlab-hairline); 
   border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
 }
 select.ctl { max-width: 220px; }
+.switch { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; }
+.switch input { width: 16px; height: 16px; flex: none; accent-color: var(--mlab-accent); margin: 0; }
+.switch span { font-size: 0.92em; color: var(--vscode-descriptionForeground); }
 .btn.tiny { padding: 5px 12px; font-size: 0.84em; }
 .origin {
   font-family: var(--mlab-mono); font-size: 0.64rem; font-weight: 600;
