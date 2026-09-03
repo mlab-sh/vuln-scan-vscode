@@ -7,6 +7,11 @@ import { loadingHtml, reportHtml, errorHtml, RenderOpts } from './reportHtml'
 // focus on the editor. The Cancel button posts a message wired to an
 // AbortController so cancellation truly aborts the in-flight HTTP request.
 //
+// Because the panel is shared, scans are generation stamped. Starting a second
+// scan aborts the first (its panel is gone, so its result would be discarded
+// anyway) and any late result from a superseded scan is ignored rather than
+// overwriting what is on screen.
+//
 // All HTML lives in the vscode-free ./reportHtml module; this class only owns the
 // panel lifecycle and message plumbing.
 
@@ -23,6 +28,8 @@ export class ReportPanel {
   private readonly logoUri: string
   private disposed = false
   private cancelHandler: (() => void) | undefined
+  /** Incremented per scan; a stale generation may no longer write to the panel. */
+  private generation = 0
 
   private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
     this.panel = panel
@@ -62,26 +69,40 @@ export class ReportPanel {
     return { nonce: nonce(), cspSource: this.panel.webview.cspSource, logoUri: this.logoUri }
   }
 
-  onCancel(handler: () => void): void {
-    this.cancelHandler = handler
+  /**
+   * Claim the panel for a new scan. Any scan already showing is cancelled, since
+   * it has just lost the only surface it could report on. The returned token is
+   * how later calls prove they are still the scan the panel belongs to.
+   */
+  begin(filename: string, onCancel: () => void): number {
+    const superseded = this.cancelHandler
+    this.cancelHandler = onCancel
+    this.generation++
+    if (superseded) superseded()
+
+    if (!this.disposed) {
+      this.panel.title = `Scanning ${filename}…`
+      this.panel.webview.html = loadingHtml(filename, this.opts())
+    }
+    return this.generation
   }
 
-  loading(filename: string): void {
+  /**
+   * `scannedAt` is set when the report comes from the cache, not a live scan.
+   * `token` identifies the scan; a superseded one is ignored rather than allowed
+   * to overwrite whatever replaced it.
+   */
+  report(filename: string, outcome: ScanOutcome, scannedAt?: number, token?: number): void {
     if (this.disposed) return
-    this.panel.title = `Scanning ${filename}…`
-    this.panel.webview.html = loadingHtml(filename, this.opts())
-  }
-
-  /** `scannedAt` is set when the report comes from the cache, not a live scan. */
-  report(filename: string, outcome: ScanOutcome, scannedAt?: number): void {
-    if (this.disposed) return
+    if (token !== undefined && token !== this.generation) return
     this.cancelHandler = undefined
     this.panel.title = `Report · ${filename}`
     this.panel.webview.html = reportHtml(filename, outcome, this.opts(), scannedAt)
   }
 
-  error(filename: string, message: string, kind?: ScanErrorKind): void {
+  error(filename: string, message: string, kind?: ScanErrorKind, token?: number): void {
     if (this.disposed) return
+    if (token !== undefined && token !== this.generation) return
     this.cancelHandler = undefined
     this.panel.title = `Report · ${filename}`
     this.panel.webview.html = errorHtml(filename, message, kind, this.opts())

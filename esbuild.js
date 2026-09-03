@@ -7,8 +7,8 @@ const watch = process.argv.includes('--watch')
 
 /**
  * Bundle the extension into a single dist/extension.js. `vscode` is provided by
- * the host at runtime, so it must stay external. Everything else (jsonc-parser)
- * is bundled in, so the published .vsix carries no node_modules.
+ * the host at runtime, so it must stay external. The extension has no runtime
+ * dependencies, so the published .vsix is the bundle plus resources, nothing else.
  */
 async function main() {
   const ctx = await esbuild.context({

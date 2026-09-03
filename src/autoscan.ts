@@ -1,5 +1,5 @@
 import * as vscode from 'vscode'
-import { isSupportedLockfile } from './detect'
+import { isSupportedLockfile, lockfileGlob } from './detect'
 import * as config from './config'
 
 // Watches lockfiles and asks for a rescan when their content changes.
@@ -12,8 +12,6 @@ import * as config from './config'
 //
 // Writes are debounced because a single `npm install` rewrites the lockfile
 // several times in a row, and each real scan costs one unit of an hourly quota.
-
-const GLOB = '**/{Cargo.lock,package-lock.json,npm-shrinkwrap.json,composer.lock,Gemfile.lock,go.sum,requirements.txt,mise.lock}'
 
 export const DEBOUNCE_MS = 4000
 
@@ -33,7 +31,7 @@ export class AutoScanner {
   }
 
   private start(): void {
-    const w = vscode.workspace.createFileSystemWatcher(GLOB, false, false, true)
+    const w = vscode.workspace.createFileSystemWatcher(lockfileGlob(), false, false, true)
     w.onDidChange((uri) => this.schedule(uri))
     w.onDidCreate((uri) => this.schedule(uri))
     this.watcher = w

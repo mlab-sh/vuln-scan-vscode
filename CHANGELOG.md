@@ -18,6 +18,19 @@ All notable changes to this extension are documented here. The format is based o
   of spending the rest of the run on the same error.
 - 15 tests covering the severity floor mapping and the lockfile line location,
   using the fixtures that had until now been referenced by no test at all.
+- CVSS v3.x base score computation, so an advisory carrying only a vector gets a
+  real severity band. Verified against the v3.1 specification and NVD's published
+  scores.
+- Cache retention: entries are dropped 30 days after their scan, on startup and
+  on every write. Storage previously grew forever, since the existing 7 day bound
+  only decided whether a hit was trusted, never whether it was kept. The two
+  bounds are now named and documented separately.
+- 12 tests for the cache, including the eviction rule and its boundary. `cache.ts`
+  no longer imports `vscode` (the one use was a type), so it is unit testable like
+  `detect.ts` and `api/client.ts`.
+- 28 tests for `api/client.ts`, previously the largest untested module: the
+  severity model, CVE alias preference, fixed version resolution, the per CVE
+  collapsing, and the summary line.
 
 - Automatic rescanning when a lockfile's contents change (`mlab.autoScan`, on by
   default), debounced so a burst of writes costs one scan. Automatic scans are
@@ -33,7 +46,8 @@ All notable changes to this extension are documented here. The format is based o
 - Persistent scan cache keyed by the SHA-256 of the lockfile's bytes. An
   unchanged lockfile is served from cache and never re-uploaded, which is what
   makes automatic scanning affordable against an 8 scans/hour anonymous quota.
-  Entries older than 7 days are rescanned so new advisories are eventually seen.
+  Entries are rescanned 7 days after their scan so new advisories are eventually
+  seen, and dropped from storage entirely after 30 days.
 - Lockfiles with known vulnerabilities are marked red in the Explorer with a
   severity badge, driven by the cache, so a file stays marked until it is
   actually patched rather than until the window is closed.
@@ -54,6 +68,17 @@ All notable changes to this extension are documented here. The format is based o
   results to act on.
 
 ### Changed
+
+- Removed `jsonc-parser`, a runtime dependency that was imported nowhere. The
+  extension now has no runtime dependencies at all.
+
+- The supported lockfile list now lives in exactly one place, `LOCKFILES` in
+  `src/detect.ts`. It used to be spread over nine: two copies inside `detect.ts`
+  itself, a hardcoded glob in the watcher, another in the workspace sweep, four
+  menu `when` regexes and the welcome text. Everything is derived from the array
+  now, and `npm run sync:manifest` writes the parts of package.json that cannot
+  import TypeScript. `sync:manifest -- --check` runs in CI, and six tests fail if
+  the manifest drifts, so adding a format is a one line edit again.
 
 - The scan path is now a single primitive shared by the command, the file watcher
   and the workspace sweep, so the cache is always consulted first and consent is
@@ -77,6 +102,27 @@ All notable changes to this extension are documented here. The format is based o
   links, since those are factual disclosures rather than branding.
 
 ### Fixed
+
+- Two scans started in quick succession fought over the shared report panel: the
+  second overwrote the first's cancel handler, leaving the first request
+  unreachable so its Cancel button did nothing. Scans are now generation stamped.
+  Claiming the panel cancels whatever was showing, and a superseded scan can no
+  longer write its result over a newer one.
+- Editing `.mlab/config.json` by hand had no effect until a reload. These files
+  are outside the VS Code configuration system, so `onDidChangeConfiguration`
+  never fires for them. Both the workspace and the home file are now watched, and
+  a change refreshes the settings page, the diagnostics and the auto scanner.
+
+- **Severity was silently under-reported.** OSV advisories very often carry their
+  severity only as a CVSS vector, with no `database_specific.severity`. The
+  parser did `parseFloat` on the last `/` separated segment of the score, which
+  for `CVSS:3.1/AV:L/.../A:H` is `A:H`, so it produced `NaN` and the finding fell
+  through to `unknown`. Confirmed against the live API: CVE-2020-26235 in
+  `time 0.1.43` returns exactly this shape and was reported as `unknown` instead
+  of `medium` (NVD scores it 6.2). Since `unknown` ranks below `low`, such
+  findings also sorted last and were demoted to Information in the Problems panel.
+  Vectors are now scored properly; CVSS v2 and v4 vectors, which this does not
+  compute, fall through to the next severity entry rather than being guessed.
 
 - Cached results were not restored when a folder was opened. The extension
   declared no `activationEvents`, so it only activated on a command or when the

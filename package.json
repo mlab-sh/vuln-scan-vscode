@@ -227,12 +227,10 @@
     "watch": "node esbuild.js --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
+    "sync:manifest": "node --import tsx scripts/sync-manifest.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "package": "npm run typecheck && vsce package --no-dependencies",
     "vscode:prepublish": "npm run build"
-  },
-  "dependencies": {
-    "jsonc-parser": "^3.3.1"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

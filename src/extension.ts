@@ -1,7 +1,13 @@
 import * as vscode from 'vscode'
 import * as fs from 'fs'
 import * as path from 'path'
-import { basenameOf, detectFormat, isSupportedLockfile, SKIP_DIRS, SUPPORTED_BASENAMES } from './detect'
+import {
+  basenameOf,
+  detectFormat,
+  excludeGlob,
+  isSupportedLockfile,
+  lockfileGlob,
+} from './detect'
 import { ReportPanel } from './views/reportPanel'
 import { HomePanel, onSettingsWritten } from './views/homePanel'
 import { FindingsTree } from './views/findingsTree'
@@ -46,6 +52,11 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(diagnostics)
 
   cache = new ScanCache(context.globalState)
+  // Drop anything past retention as soon as the cache is opened, so storage does
+  // not carry results from projects that have not been touched in a month.
+  void cache.prune().then((n) => {
+    if (n > 0) output.appendLine(`[cache] pruned ${n} entr${n === 1 ? 'y' : 'ies'} past retention`)
+  })
   decorations = new LockfileDecorations(cache)
   context.subscriptions.push(vscode.window.registerFileDecorationProvider(decorations))
 
@@ -59,15 +70,18 @@ export function activate(context: vscode.ExtensionContext): void {
   autoScanner.sync()
   // `.mlab` files live outside the VS Code config system, so the page tells us
   // directly when one is written.
-  onSettingsWritten(() => {
+  const onSettingsChanged = () => {
     autoScanner.sync()
     void refreshDiagnostics()
-  })
+    void HomePanel.refresh()
+  }
+  onSettingsWritten(onSettingsChanged)
+  // `.mlab` files are edited by hand too, and no configuration event fires then.
+  context.subscriptions.push(config.watch(onSettingsChanged))
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (!e.affectsConfiguration('mlab')) return
-      autoScanner.sync()
-      void refreshDiagnostics()
+      onSettingsChanged()
     }),
   )
 
@@ -225,11 +239,11 @@ async function performScan(uri: vscode.Uri, opts: ScanOpts): Promise<ScanResult>
     return { kind: 'skipped', reason: 'no-consent' }
   }
 
-  const panel = quiet ? undefined : ReportPanel.show(ctx.extensionUri)
-  panel?.loading(filename)
-
   const controller = new AbortController()
-  panel?.onCancel(() => controller.abort())
+  const panel = quiet ? undefined : ReportPanel.show(ctx.extensionUri)
+  // Claiming the panel cancels whatever scan was showing, and hands back a token
+  // so a superseded scan cannot write its result over a newer one.
+  const panelToken = panel?.begin(filename, () => controller.abort())
   if (opts.signal) {
     if (opts.signal.aborted) controller.abort()
     else opts.signal.addEventListener('abort', () => controller.abort(), { once: true })
@@ -253,11 +267,11 @@ async function performScan(uri: vscode.Uri, opts: ScanOpts): Promise<ScanResult>
 
     await cache.put(uri.fsPath, filename, hash, outcome)
     publish(uri, filename, text, outcome)
-    panel?.report(filename, outcome)
+    panel?.report(filename, outcome, undefined, panelToken)
     output.appendLine(`[${label}] ${filename}: ${summarize(outcome)}`)
     return { kind: 'scanned', outcome }
   } catch (err) {
-    handleScanError(err, filename, panel, quiet)
+    handleScanError(err, filename, panel, quiet, panelToken)
     return { kind: 'failed', error: err }
   }
 }
@@ -378,10 +392,11 @@ function handleScanError(
   filename: string,
   panel: ReportPanel | undefined,
   auto = false,
+  token?: number,
 ): void {
   if (err instanceof ScanError) {
     output.appendLine(`[error] ${filename}: ${err.kind}: ${err.message}`)
-    panel?.error(filename, err.message, err.kind)
+    panel?.error(filename, err.message, err.kind, token)
 
     // A background scan never interrupts. A rate limit in particular would
     // otherwise pop on every debounced write for the rest of the hour.
@@ -410,7 +425,7 @@ function handleScanError(
 
   const message = err instanceof Error ? err.message : String(err)
   output.appendLine(`[error] ${filename}: ${message}`)
-  panel?.error(filename, `Unexpected error: ${message}`)
+  panel?.error(filename, `Unexpected error: ${message}`, undefined, token)
   if (auto) return
   vscode.window.showErrorMessage(`mlab: unexpected error scanning ${filename}. See the "mlab" output channel.`)
 }
@@ -477,9 +492,7 @@ async function scanWorkspace(): Promise<void> {
     return
   }
 
-  const includes = lockfileGlob()
-  const excludes = `**/{${SKIP_DIRS.join(',')}}/**`
-  const found = await vscode.workspace.findFiles(includes, excludes)
+  const found = await vscode.workspace.findFiles(lockfileGlob(), excludeGlob())
   if (found.length === 0) {
     vscode.window.showInformationMessage('mlab: no supported lockfile found in this workspace.')
     return
@@ -575,10 +588,5 @@ async function scanWorkspace(): Promise<void> {
   } else {
     vscode.window.showInformationMessage(line)
   }
-}
-
-/** Single source for the lockfile glob, derived from `KNOWN` in detect.ts. */
-function lockfileGlob(): string {
-  return `**/{${SUPPORTED_BASENAMES.join(',')}}`
 }
 

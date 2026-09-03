@@ -1,4 +1,3 @@
-import * as vscode from 'vscode'
 import * as crypto from 'crypto'
 import { ScanOutcome } from './api/client'
 
@@ -9,16 +8,54 @@ import { ScanOutcome } from './api/client'
 // network entirely until the file actually changes, which is what makes auto
 // scanning affordable against an 8 scans/hour anonymous quota.
 //
+// Two time bounds, doing different jobs. Do not confuse them:
+//   - FRESHNESS (`DEFAULT_MAX_AGE_MS`) is how long a hit is trusted for. Past it
+//     the lockfile is rescanned even though its bytes did not change, so a CVE
+//     published in the meantime is eventually seen.
+//   - RETENTION (`RETENTION_MS`) is how long an entry is kept at all. Past it the
+//     entry is dropped from storage, which is what stops the cache growing
+//     forever across every project ever opened.
+//
 // Two consequences worth stating:
-//   - A cached "clean" result stays clean until the lockfile changes, even if a
-//     new CVE is published upstream in the meantime. `maxAgeMs` bounds that.
+//   - A cached "clean" result stays clean until the lockfile changes or its
+//     freshness runs out.
 //   - A cached "vulnerable" result keeps the file red until the lockfile is
-//     actually edited, which is exactly the "stays red until patched" behaviour.
+//     actually edited, which is the "stays red until patched" behaviour. That
+//     mark does not outlive retention: a vulnerable lockfile left untouched for
+//     longer than RETENTION_MS loses its entry, and with it its mark, until it
+//     is scanned again.
 
 const STORE_KEY = 'mlab.scanCache.v1'
 
+const DAY_MS = 24 * 60 * 60 * 1000
+
 /** Entries older than this are re-scanned, so new advisories are eventually seen. */
-export const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+export const DEFAULT_MAX_AGE_MS = 7 * DAY_MS
+
+/** Entries older than this are dropped from storage entirely. */
+export const RETENTION_MS = 30 * DAY_MS
+
+/**
+ * The slice of `vscode.Memento` this needs. Declared structurally so the module
+ * has no `vscode` import and can be unit tested, the same way detect.ts and
+ * api/client.ts are.
+ */
+export interface Store {
+  get<T>(key: string, defaultValue: T): T
+  update(key: string, value: unknown): Thenable<void>
+}
+
+/**
+ * Keys of every entry past its retention. Pure, so the eviction rule is testable
+ * without a fake editor around it.
+ */
+export function expiredKeys(
+  entries: Record<string, CacheEntry>,
+  now: number,
+  retentionMs: number = RETENTION_MS,
+): string[] {
+  return Object.keys(entries).filter((k) => now - entries[k].at > retentionMs)
+}
 
 export interface CacheEntry {
   /** SHA-256 of the lockfile bytes at scan time. */
@@ -39,8 +76,21 @@ export function hashOf(body: Uint8Array): string {
 export class ScanCache {
   private entries: Record<string, CacheEntry>
 
-  constructor(private readonly memento: vscode.Memento) {
+  constructor(private readonly memento: Store) {
     this.entries = memento.get<Record<string, CacheEntry>>(STORE_KEY, {})
+  }
+
+  /**
+   * Drop everything past retention. Called when the cache is first opened and
+   * after each write, so storage cannot grow without bound across projects.
+   * Returns how many entries went, for the log.
+   */
+  async prune(now: number = Date.now()): Promise<number> {
+    const gone = expiredKeys(this.entries, now)
+    if (gone.length === 0) return 0
+    for (const k of gone) delete this.entries[k]
+    await this.memento.update(STORE_KEY, this.entries)
+    return gone.length
   }
 
   /** Cached result for this exact content, if fresh enough. */
@@ -73,6 +123,9 @@ export class ScanCache {
       at: Date.now(),
     }
     this.entries[fsPath] = entry
+    // Prune on write rather than on a timer: it keeps the bound honest without
+    // any background work, and the cost is one pass over a small object.
+    for (const k of expiredKeys(this.entries, Date.now())) delete this.entries[k]
     await this.memento.update(STORE_KEY, this.entries)
     return entry
   }

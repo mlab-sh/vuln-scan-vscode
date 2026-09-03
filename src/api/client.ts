@@ -4,6 +4,7 @@
 // runtime dependency is Node 18+'s global fetch. The severity/CVE/fixed-version
 // normalization is ported verbatim from mlab-sh/vuln-scan-action (src/index.ts).
 
+import { scoreOf } from './cvss'
 import {
   Finding,
   OsvVuln,
@@ -21,14 +22,20 @@ function bandFromCvss(score: number): Severity {
   return 'unknown'
 }
 
-/** Normalize an OSV vuln to one of our severity bands (vuln-scan-action logic). */
+/**
+ * Normalize an OSV vuln to one of our severity bands.
+ *
+ * `database_specific.severity` wins when present, which is what GitHub
+ * advisories carry. Otherwise the CVSS vector is scored: OSV entries very often
+ * have only that, and reading it is the difference between a real band and
+ * `unknown`. See ./cvss for why the vector cannot just be parseFloat'd.
+ */
 export function severityOf(v: OsvVuln): Severity {
   const ds = v.database_specific?.severity?.toLowerCase()
   if (ds) return ds === 'moderate' ? 'medium' : (ds in SEV_RANK ? (ds as Severity) : 'unknown')
   for (const s of v.severity ?? []) {
-    const raw = s.score ?? ''
-    const num = parseFloat(raw.includes('/') ? raw.split('/').pop()! : raw)
-    if (!Number.isNaN(num)) return bandFromCvss(num)
+    const num = scoreOf(s.score ?? '')
+    if (num !== undefined) return bandFromCvss(num)
   }
   return 'unknown'
 }

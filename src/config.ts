@@ -148,6 +148,36 @@ export async function reset<K extends keyof MlabConfig>(key: K): Promise<void> {
   }
 }
 
+/**
+ * Watch both `.mlab/config.json` files and call back when either changes.
+ *
+ * These live outside the VS Code configuration system, so
+ * `onDidChangeConfiguration` never fires for them. Without this, editing a
+ * config file by hand leaves the settings page showing a stale value and the
+ * auto scanner running on an outdated setting.
+ */
+export function watch(onChanged: () => void): vscode.Disposable {
+  const subs: vscode.Disposable[] = []
+
+  const folder = vscode.workspace.workspaceFolders?.[0]
+  if (folder) {
+    const w = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(folder, `${CONFIG_DIRNAME}/${CONFIG_FILENAME}`),
+    )
+    subs.push(w, w.onDidChange(onChanged), w.onDidCreate(onChanged), w.onDidDelete(onChanged))
+  }
+
+  // The user file is outside every workspace folder, so it needs its own
+  // pattern rooted at the home directory.
+  const home = vscode.Uri.file(os.homedir())
+  const uw = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(home, `${CONFIG_DIRNAME}/${CONFIG_FILENAME}`),
+  )
+  subs.push(uw, uw.onDidChange(onChanged), uw.onDidCreate(onChanged), uw.onDidDelete(onChanged))
+
+  return vscode.Disposable.from(...subs)
+}
+
 /** Human label for a layer, used by the settings page badges. */
 export function layerLabel(layer: Layer): string {
   switch (layer) {

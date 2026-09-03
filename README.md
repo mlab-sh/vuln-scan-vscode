@@ -16,6 +16,9 @@ its contents change. Two things keep that cheap and predictable:
 
 - Results are **cached per file content**, so an unchanged lockfile is never
   re-uploaded. A `npm install` that does not move any version costs nothing.
+  A cached result is trusted for 7 days, after which the lockfile is rescanned so
+  a newly published advisory is eventually seen, and is dropped from storage
+  after 30 days so the cache cannot grow without bound.
 - Writes are **debounced**, so a burst of edits to the same lockfile produces one
   scan, not several.
 
@@ -79,6 +82,11 @@ with a **Cancel** button, then the final report.
 
 `Cargo.lock`, `package-lock.json`, `npm-shrinkwrap.json`, `composer.lock`,
 `Gemfile.lock`, `go.sum`, `requirements.txt`, `mise.lock`.
+
+Adding a format is a one line edit: append it to `LOCKFILES` in
+[`src/detect.ts`](src/detect.ts), then run `npm run sync:manifest`. The menu
+clauses, the activation event, the globs and the welcome text all derive from
+that array, and CI fails if they drift.
 
 `Scan all lockfiles in workspace` walks the workspace with `workspace.findFiles`
 and skips `node_modules`, `vendor`, `target`, `dist`, and `.git`. It is quota
@@ -151,6 +159,7 @@ npm run typecheck
 npm run lint
 npm run test       # unit tests
 npm run package    # produce a .vsix
+npm run sync:manifest  # regenerate the package.json parts derived from src/detect.ts
 ```
 
 Press `F5` to launch an Extension Development Host on `test/fixtures`. It runs
