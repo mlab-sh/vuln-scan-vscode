@@ -52,6 +52,24 @@ with a **Cancel** button, then the final report.
 
 ## What you get
 
+- **Exploitation intelligence on every finding**: the EPSS probability and
+  whether the CVE is in the CISA or EU known-exploited catalogues. This is what
+  makes triage possible: a critical at 0.02% EPSS and not exploited anywhere is
+  not the same emergency as a high that CISA lists as under active attack. The
+  report sorts by that, not by CVSS band alone.
+- **Analyze selection**: highlight a URL, IP, email, file hash, MAC address or
+  domain,
+  right-click, and get it looked up. What the value *is* gets worked out on your
+  machine, so only the value itself is sent, and only to the endpoint for that
+  type. Works without a key at a reduced quota. Set `mlab.analyzeSelection` to
+  `false` to remove the menu entry. Every result carries a **See the full scan on
+  mlab** link. One caveat worth knowing: a domain is the only kind that contacts
+  the target rather than reading a database. It reuses an existing report when
+  there is one, and only spends one of your 25 daily organisation-wide scans when
+  there is genuinely nothing to reuse.
+- **Hover any CVE identifier**, in any file, for its CVSS, EPSS, known-exploited
+  status, risk score and weaknesses. Set `mlab.cveHover` to `false` to turn it
+  off.
 - A report panel beside the lockfile with a per-severity summary
   (for example `3 critical, 12 high, 4 low across 6 packages`) and a table of
   findings: package, advisory (CVE id linking to its
@@ -136,6 +154,9 @@ the native settings editor stays one click away.
 | Setting | Default | Description |
 | --- | --- | --- |
 | `mlab.autoScan` | `true` | Rescan a lockfile when its contents change. Never uploads anything before you have consented once. |
+| `mlab.analyzeSelection` | `true` | Offer **Analyze selection** in the editor context menu. |
+| `mlab.platformUrl` | `https://mlab.sh/api/v1` | Platform API base, for indicator lookups. |
+| `mlab.cveHover` | `true` | Show CVSS, EPSS and known-exploited status when you hover a CVE identifier. Only the identifier is looked up. |
 | `mlab.apiUrl` | `https://vuln.mlab.sh/api/v2/scan` | Scan endpoint. Override for a self-hosted instance. |
 | `mlab.severityFloor` | `any` | Lowest severity reported as a Warning/Error diagnostic; below it, findings are shown as Information. Tunes severity mapping only, never fails anything. |
 | `mlab.timeoutMs` | `30000` | Per-request timeout in milliseconds. |

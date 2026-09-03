@@ -2,7 +2,7 @@
   "name": "vuln-scan",
   "displayName": "mlab security",
   "description": "CVE scanning for your lockfiles, powered by mlab. Nothing is uploaded until you agree once; after that, changed lockfiles are rescanned automatically and results are cached per content.",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "publisher": "mlab-sh",
   "license": "MIT",
   "repository": {
@@ -70,6 +70,12 @@
         "category": "mlab"
       },
       {
+        "command": "mlab.analyzeSelection",
+        "title": "Analyze selection",
+        "category": "mlab",
+        "icon": "$(search)"
+      },
+      {
         "command": "mlab.openHome",
         "title": "Open mlab",
         "category": "mlab",
@@ -115,6 +121,11 @@
           "command": "mlab.checkLockfile",
           "when": "resourceFilename =~ /^(Cargo\\.lock|package-lock\\.json|npm-shrinkwrap\\.json|composer\\.lock|Gemfile\\.lock|go\\.sum|requirements\\.txt|mise\\.lock)$/i",
           "group": "2_workspace@100"
+        },
+        {
+          "command": "mlab.analyzeSelection",
+          "when": "editorHasSelection && mlab.analyzeSelection",
+          "group": "2_workspace@98"
         }
       ],
       "view/title": [
@@ -195,10 +206,25 @@
           "default": true,
           "markdownDescription": "Rescan a lockfile automatically when its contents change. Results are cached per file content, so an unchanged lockfile is never re-uploaded. Nothing is ever uploaded before you have accepted the one time privacy prompt, so this setting produces no network traffic until then."
         },
+        "mlab.cveHover": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show CVSS, exploitation likelihood (EPSS) and known-exploited status when you hover a CVE identifier in any file. Only the identifier is looked up, never the surrounding code, and results are cached for a day."
+        },
+        "mlab.analyzeSelection": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Offer **Analyze selection** in the editor context menu. Select a URL, IP, email, file hash or MAC address and look it up on the mlab platform. Only the selected value is sent, never the surrounding file."
+        },
         "mlab.apiUrl": {
           "type": "string",
           "default": "https://vuln.mlab.sh/api/v2/scan",
           "markdownDescription": "Scan endpoint. Override this to point at a self-hosted vuln.mlab.sh instance."
+        },
+        "mlab.platformUrl": {
+          "type": "string",
+          "default": "https://mlab.sh/api/v1",
+          "markdownDescription": "Base URL of the mlab platform API, used by `mlab: Analyze selection`. Override it to point at a self-hosted instance."
         },
         "mlab.severityFloor": {
           "type": "string",

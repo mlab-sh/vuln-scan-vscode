@@ -1,4 +1,7 @@
 node_modules/
+# Except the fixture one: a lockfile inside node_modules is exactly what proves
+# the workspace sweep's exclude glob works, so it has to be committed.
+!test/fixtures/node_modules/
 dist/
 out/
 *.vsix

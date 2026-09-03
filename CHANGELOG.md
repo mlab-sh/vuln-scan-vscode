@@ -3,9 +3,58 @@
 All notable changes to this extension are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.0.1] - 2026-09-03
+
+First release since 0.1.0, and a large one. Two things change behaviour rather
+than adding to it, so they are worth reading before upgrading: scanning can now
+happen automatically (still never before you have agreed once), and a severity
+parsing fix reclassifies findings that used to read as `unknown`.
 
 ### Added
+
+- **Analyze selection** (`mlab.analyzeSelection`, on by default). Select a URL,
+  IP address, email, file hash or MAC address, right-click, and look it up on the
+  mlab platform. The type is worked out **locally** and only then does the value
+  reach the endpoint that handles it, so nothing is uploaded merely to find out
+  what something is. A selection over 2048 characters is refused: that is a chunk
+  of file, not an indicator.
+- Lookups work with no credential at the anonymous quota. The mlab page gained a
+  second field for a platform API key, which raises that quota. It is a separate
+  credential from the vuln.mlab.sh scan token and the page says so.
+- Domain scanning, wired into the same right-click as the rest. **An existing
+  completed scan is reused instead of launching a new one**, which matters
+  because `POST /scan/domain` checks the quota and then purges and relaunches:
+  it spends one of the 25 daily organisation-wide scans even when a perfectly
+  good recent report already exists. Reading that report is a plain GET and costs
+  nothing, verified against the live API. The panel shows the scan date so a
+  reused report is never mistaken for a fresh one.
+- When there is nothing to reuse, the scan is launched, polled and then read, so it runs behind a cancellable
+  progress notification with a backing-off poll. It is also the only kind that
+  **contacts the target** rather than reading a database, and it spends one of
+  25 daily organisation-wide scans.
+- **See the full scan on mlab** on every result, opening the indicator's page in
+  a browser. Every kind has a page: five take the value in the path, the URL page
+  takes it as a `q` parameter, which was checked against the live site.
+- `mlab.platformUrl` for pointing indicator lookups at a self-hosted instance.
+- 38 tests for the local type detection, the routing and the response
+  normalisation, including the cases where formats collide: a colon separated MAC
+  against an IPv6 address, and a bare MAC against a short hash.
+
+- **Findings are enriched with exploitation intelligence.** Every CVE now carries
+  its EPSS score (probability of exploitation in the next 30 days) and whether it
+  sits in the CISA or EU known-exploited catalogues, from the public
+  `/api/v1/cve` endpoint. The report gains an Exploit column, a banner naming
+  anything actively exploited, and sorts by real exploitation before CVSS band:
+  a high that is being exploited outranks a critical that is not.
+- **CVE details on hover** (`mlab.cveHover`, on by default). Hovering a CVE
+  identifier in any file shows CVSS, EPSS with its percentile, known-exploited
+  status with its remediation deadline, the mlab risk score and the CWE
+  weaknesses. Works in comments and changelogs, not just lockfiles.
+- Both need **no authentication and no quota**, and send only a CVE identifier,
+  never anything about your code, so neither changes what the privacy consent
+  covers. Results are cached for a day and dropped after 30 days.
+- 22 tests for the intelligence client and its cache, including the exact-id
+  matching that the search endpoint makes necessary.
 
 - Diagnostics in the Problems panel for every finding, anchored on the line of the
   lockfile that declares the package. This is what `mlab.severityFloor` has always
@@ -162,4 +211,5 @@ Initial release.
 - Settings: `mlab.apiUrl`, `mlab.severityFloor`, `mlab.timeoutMs`.
 - mlab-branded UI derived from the vuln.mlab.sh design system.
 
+[1.0.1]: https://github.com/mlab-sh/vuln-scan-vscode/releases/tag/v1.0.1
 [0.1.0]: https://github.com/mlab-sh/vuln-scan-vscode/releases/tag/v0.1.0

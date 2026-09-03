@@ -3,7 +3,9 @@
     "module": "Node16",
     "moduleResolution": "Node16",
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "outDir": "out",
     "rootDir": ".",
     "sourceMap": true,
@@ -17,6 +19,15 @@
     "esModuleInterop": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
-  "exclude": ["node_modules", "dist", "out"]
+  "include": [
+    "src/**/*.ts",
+    "test/*.ts",
+    "scripts/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "out",
+    "test/fixtures"
+  ]
 }

@@ -60,6 +60,8 @@ export const SEVERITY_ORDER: Severity[] = ['critical', 'high', 'medium', 'low', 
 
 /** A single vulnerability against a single package, ready to render. */
 export interface Finding {
+  /** Filled in after the scan by the CVE intelligence lookup, when available. */
+  intel?: import('./intel').CveIntel
   /** `name@version`. */
   pkg: string
   name: string

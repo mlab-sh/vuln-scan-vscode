@@ -13,6 +13,12 @@ import { HomePanel, onSettingsWritten } from './views/homePanel'
 import { FindingsTree } from './views/findingsTree'
 import { LockfileDecorations } from './views/decorations'
 import { ScanCache, hashOf } from './cache'
+import { IntelCache } from './intelCache'
+import { fetchMany } from './api/intel'
+import { CveHover } from './views/cveHover'
+import { IndicatorPanel } from './views/indicatorPanel'
+import { lookup, scanDomain, webUrlFor, IndicatorError } from './api/indicator'
+import { clean, detectKind, isSupported, costsQuota, isActive, kindLabel, MAX_LENGTH } from './ioc'
 import { AutoScanner } from './autoscan'
 import { LockfileDiagnostics } from './diagnostics'
 import * as config from './config'
@@ -29,6 +35,8 @@ import { scanLockfile, ScanError, summarize, ScanOutcome } from './api/client'
 
 const TOKEN_KEY = 'mlab.apiToken'
 const PRIVACY_KEY = 'mlab.privacyConsent'
+/** The mlab platform key. A different credential from the scan token above. */
+const PLATFORM_KEY = 'mlab.platformKey'
 
 let output: vscode.OutputChannel
 let ctx: vscode.ExtensionContext
@@ -38,6 +46,7 @@ let cache: ScanCache
 let decorations: LockfileDecorations
 let autoScanner: AutoScanner
 let diagnostics: LockfileDiagnostics
+let intelCache: IntelCache
 
 export function activate(context: vscode.ExtensionContext): void {
   ctx = context
@@ -50,6 +59,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
   diagnostics = new LockfileDiagnostics()
   context.subscriptions.push(diagnostics)
+
+  intelCache = new IntelCache(context.globalState)
+  // Works on any file: CVE ids turn up in comments and changelogs, not just
+  // in the lockfiles this extension scans.
+  context.subscriptions.push(
+    vscode.languages.registerHoverProvider({ scheme: 'file' }, new CveHover(intelCache)),
+  )
 
   cache = new ScanCache(context.globalState)
   // Drop anything past retention as soon as the cache is opened, so storage does
@@ -71,11 +87,19 @@ export function activate(context: vscode.ExtensionContext): void {
   // `.mlab` files live outside the VS Code config system, so the page tells us
   // directly when one is written.
   const onSettingsChanged = () => {
+    // The menu entry is gated on a context key, which has to be kept in step
+    // with the setting by hand: `when` clauses cannot read configuration.
+    void vscode.commands.executeCommand(
+      'setContext',
+      'mlab.analyzeSelection',
+      config.get('analyzeSelection') === true,
+    )
     autoScanner.sync()
     void refreshDiagnostics()
     void HomePanel.refresh()
   }
   onSettingsWritten(onSettingsChanged)
+  onSettingsChanged()
   // `.mlab` files are edited by hand too, and no configuration event fires then.
   context.subscriptions.push(config.watch(onSettingsChanged))
   context.subscriptions.push(
@@ -101,6 +125,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const uri = arg instanceof vscode.Uri ? arg : arg?.resourceUri
     if (uri) vscode.commands.executeCommand('vscode.open', uri)
   })
+  register('mlab.analyzeSelection', () => void analyzeSelection())
   register('mlab.openHome', () => HomePanel.show(ctx))
   register('mlab.manageToken', () => HomePanel.show(ctx))
 
@@ -265,6 +290,7 @@ async function performScan(uri: vscode.Uri, opts: ScanOpts): Promise<ScanResult>
       signal: controller.signal,
     })
 
+    await enrich(outcome, controller.signal)
     await cache.put(uri.fsPath, filename, hash, outcome)
     publish(uri, filename, text, outcome)
     panel?.report(filename, outcome, undefined, panelToken)
@@ -273,6 +299,36 @@ async function performScan(uri: vscode.Uri, opts: ScanOpts): Promise<ScanResult>
   } catch (err) {
     handleScanError(err, filename, panel, quiet, panelToken)
     return { kind: 'failed', error: err }
+  }
+}
+
+/**
+ * Attach CVE intelligence (EPSS, KEV, CVSS) to each finding, in place.
+ *
+ * Best effort by design: the endpoint is public and unauthenticated, but if it
+ * is slow or unreachable the report is still perfectly usable, so a failure here
+ * never fails a scan. Cached ids cost nothing.
+ */
+async function enrich(outcome: ScanOutcome, signal?: AbortSignal): Promise<void> {
+  const ids = outcome.findings.map((f) => f.cve).filter((c) => c.startsWith('CVE-'))
+  if (ids.length === 0) return
+
+  const { known, missing } = intelCache.partition(ids)
+  if (missing.length > 0) {
+    const origin = new URL(config.get('apiUrl')).origin
+    const fetched = await fetchMany(missing, {
+      origin,
+      timeoutMs: Math.min(config.get('timeoutMs'), 10000),
+      signal,
+    })
+    await intelCache.putAll(fetched)
+    for (const [id, v] of fetched) known.set(id, v)
+    output.appendLine(`[intel] ${fetched.size}/${missing.length} fetched, ${ids.length - missing.length} cached`)
+  }
+
+  for (const f of outcome.findings) {
+    const hit = known.get(f.cve)
+    if (hit) f.intel = hit
   }
 }
 
@@ -335,6 +391,122 @@ async function checkLockfile(resource?: vscode.Uri, opts: ScanOpts = {}): Promis
   } else {
     vscode.window.showWarningMessage(`mlab: ${line} in ${filename}.`)
   }
+}
+
+// ── Analyse the selected indicator ───────────────────────────────────────────
+// The type is worked out locally and only then does the value reach the endpoint
+// that handles it. Selecting the text and running the command is itself the
+// explicit act, which is why this needs no separate consent: nothing is read
+// from the file beyond what the user highlighted.
+async function analyzeSelection(): Promise<void> {
+  const editor = vscode.window.activeTextEditor
+  if (!editor) {
+    vscode.window.showInformationMessage('mlab: select an indicator in an editor first.')
+    return
+  }
+
+  // Fall back to the word under the cursor, so a double click is enough.
+  const sel = editor.selection.isEmpty
+    ? editor.document.getWordRangeAtPosition(editor.selection.active, /[^\s'"`<>()[\]{},;]+/)
+    : editor.selection
+  const raw = sel ? editor.document.getText(sel) : ''
+  const value = clean(raw)
+
+  if (value === '') {
+    vscode.window.showInformationMessage('mlab: nothing selected to analyse.')
+    return
+  }
+  if (value.length > MAX_LENGTH) {
+    vscode.window.showWarningMessage(
+      `mlab: that selection is ${value.length} characters. Select a single indicator, not a block of the file.`,
+    )
+    return
+  }
+  if (!vscode.workspace.isTrusted) {
+    vscode.window.showWarningMessage(
+      'mlab: analysis is disabled in Restricted Mode because it sends the selected value. Trust this workspace to use it.',
+    )
+    return
+  }
+
+  const kind = detectKind(value)
+  if (!isSupported(kind)) {
+    vscode.window.showInformationMessage(
+      `mlab: could not tell what "${truncateForMessage(value)}" is, so nothing was sent. Supported: URL, IP, email, file hash, MAC address.`,
+    )
+    return
+  }
+
+  const panel = IndicatorPanel.show(ctx.extensionUri)
+  panel.loading(kind, value)
+
+  try {
+    const key = await ctx.secrets.get(PLATFORM_KEY)
+    const quota = costsQuota(kind) ? ' (spends one daily lookup)' : ''
+    output.appendLine(`[ioc] ${kindLabel(kind)}: ${value}${key ? ' (key)' : ' (anonymous)'}${quota}`)
+
+    const base = String(config.get('platformUrl'))
+    const report = isActive(kind)
+      ? // A domain is launched, polled, then read, and it contacts the target.
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: `mlab: scanning ${value}`,
+            cancellable: true,
+          },
+          async (progress, cancelToken) => {
+            const ctrl = new AbortController()
+            cancelToken.onCancellationRequested(() => ctrl.abort())
+            return scanDomain({
+              base,
+              domain: value,
+              key: key || undefined,
+              timeoutMs: config.get('timeoutMs'),
+              signal: ctrl.signal,
+              onState: (state) => {
+                if (state === 'reused') {
+                  output.appendLine(`[ioc] ${value}: reused an existing scan, no quota spent`)
+                }
+                progress.report({
+                  message:
+                    state === 'reused'
+                      ? 'reusing the existing scan'
+                      : state === 'done'
+                        ? 'collecting results'
+                        : `${state}…`,
+                })
+              },
+            })
+          },
+        )
+      : await lookup({
+          base,
+          kind,
+          value,
+          key: key || undefined,
+          timeoutMs: config.get('timeoutMs'),
+        })
+
+    // Always offer the full result in a browser: the panel is a summary.
+    report.webUrl = webUrlFor(new URL(base).origin, kind, value)
+    panel.report(report)
+    output.appendLine(`[ioc] ${value}: ${report.findings.length} finding(s)`)
+  } catch (err) {
+    const message = err instanceof IndicatorError ? err.message : `Unexpected error: ${err}`
+    output.appendLine(`[error] ${value}: ${message}`)
+    panel.error(kind, value, message)
+    if (err instanceof IndicatorError && err.kind === 'rate-limit') {
+      const add = 'Add a platform key'
+      const choice = await vscode.window.showWarningMessage(`mlab: ${message}`, add)
+      if (choice === add) await HomePanel.show(ctx)
+    } else {
+      vscode.window.showErrorMessage(`mlab: ${message}`)
+    }
+  }
+}
+
+function truncateForMessage(v: string): string {
+  return v.length <= 40 ? v : v.slice(0, 39) + '…'
 }
 
 // Opens the report for a lockfile we already have results for. Reads the cache

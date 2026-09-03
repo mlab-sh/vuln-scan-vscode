@@ -19,6 +19,8 @@ import * as config from '../config'
 // it is handed to the extension via postMessage and immediately persisted.
 
 const TOKEN_KEY = 'mlab.apiToken'
+/** The mlab platform key: a different credential, for indicator lookups. */
+const PLATFORM_KEY = 'mlab.platformKey'
 
 /**
  * Called after any settings write. `.mlab` files are outside the VS Code
@@ -46,6 +48,18 @@ const SETTINGS: SettingDesc[] = [
     label: 'Scan automatically on change',
     kind: 'boolean',
     hint: 'Rescan a lockfile when its contents change. Results are cached per content, so an unchanged file is never re-uploaded, and nothing is uploaded at all before you accept the privacy prompt.',
+  },
+  {
+    key: 'analyzeSelection',
+    label: 'Analyze selection in the context menu',
+    kind: 'boolean',
+    hint: 'Right-click a selected URL, IP, email, file hash or MAC address to look it up. Only the selected value is sent, never the file around it.',
+  },
+  {
+    key: 'cveHover',
+    label: 'CVE details on hover',
+    kind: 'boolean',
+    hint: 'Hover a CVE identifier in any file to see its CVSS, its exploitation likelihood and whether it is actively exploited. Only the identifier is looked up, never your code.',
   },
   {
     key: 'apiUrl',
@@ -163,6 +177,26 @@ export class HomePanel {
         await this.render()
         break
       }
+      case 'savePlatform': {
+        const key = String(msg.token ?? '').trim()
+        if (!key) {
+          await this.context.secrets.delete(PLATFORM_KEY)
+          vscode.window.showInformationMessage('mlab: platform key cleared.')
+        } else {
+          await this.context.secrets.store(PLATFORM_KEY, key)
+          vscode.window.showInformationMessage('mlab: platform key saved.')
+        }
+        await this.render()
+        break
+      }
+      case 'clearPlatform':
+        await this.context.secrets.delete(PLATFORM_KEY)
+        vscode.window.showInformationMessage('mlab: platform key cleared.')
+        await this.render()
+        break
+      case 'openPlatformKeys':
+        vscode.env.openExternal(vscode.Uri.parse('https://mlab.sh/account/subscription'))
+        break
       case 'clear':
         await this.context.secrets.delete(TOKEN_KEY)
         vscode.window.showInformationMessage('mlab: API token cleared.')
@@ -241,7 +275,8 @@ export class HomePanel {
   private async render(): Promise<void> {
     if (this.disposed) return
     const hasToken = !!(await this.context.secrets.get(TOKEN_KEY))
-    this.panel.webview.html = this.html(hasToken, this.readSettings())
+    const hasPlatform = !!(await this.context.secrets.get(PLATFORM_KEY))
+    this.panel.webview.html = this.html(hasToken, hasPlatform, this.readSettings())
   }
 
   /** One editable settings row: control, provenance badge, reset. */
@@ -276,7 +311,7 @@ export class HomePanel {
     </div>`
   }
 
-  private html(hasToken: boolean, settings: SettingState[]): string {
+  private html(hasToken: boolean, hasPlatform: boolean, settings: SettingState[]): string {
     const n = nonce()
     const logo = this.panel.webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'resources', 'icon.png'),
@@ -342,6 +377,34 @@ export class HomePanel {
   </section>
 
   <section>
+    <h2>Platform key</h2>
+    <p class="muted">A <strong>separate credential</strong> from the scan token above: that one is for
+      lockfile scans on vuln.mlab.sh, this one is for indicator lookups on the mlab platform
+      (<em>Analyze selection</em>). Indicator lookups work without it at a reduced daily quota; a key
+      raises the quota and unlocks the richer enrichment.</p>
+    <div class="status ${hasPlatform ? 'ok' : 'anon'}">
+      <span class="dot"></span>
+      <div>${
+        hasPlatform
+          ? '<strong>Platform key set.</strong> Lookups run against your plan quota.'
+          : '<strong>No platform key.</strong> Lookups still work, at the anonymous quota.'
+      }</div>
+    </div>
+    <ol class="steps">
+      <li>Open <a id="platform-link" href="#">mlab.sh account settings</a> and create an API key.</li>
+      <li>Paste it below and click <em>Save key</em>.</li>
+    </ol>
+    <div class="row">
+      <input id="platform" type="password" aria-label="mlab platform key" placeholder="${hasPlatform ? 'A key is already set' : 'Paste your platform key'}" autocomplete="off" spellcheck="false" />
+      <button id="reveal-platform" class="btn ghost" type="button" title="Show or hide">&#128065;</button>
+    </div>
+    <div class="actions">
+      <button id="save-platform" class="btn" type="button">Save key</button>
+      ${hasPlatform ? '<button id="clear-platform" class="btn ghost" type="button">Remove key</button>' : ''}
+    </div>
+  </section>
+
+  <section>
     <h2>Settings</h2>
     <div class="scope-row">
       <span class="muted small">Write changes to</span>
@@ -375,6 +438,16 @@ export class HomePanel {
   document.getElementById('check').addEventListener('click', () => post('checkLockfile'));
   document.getElementById('workspace').addEventListener('click', () => post('scanWorkspace'));
   document.getElementById('tokens-link').addEventListener('click', (e) => { e.preventDefault(); post('openTokens'); });
+  const platform = document.getElementById('platform');
+  document.getElementById('save-platform').addEventListener('click', () => {
+    vscode.postMessage({ type: 'savePlatform', token: platform.value });
+    platform.value = '';
+  });
+  document.getElementById('clear-platform')?.addEventListener('click', () => post('clearPlatform'));
+  document.getElementById('platform-link').addEventListener('click', (e) => { e.preventDefault(); post('openPlatformKeys'); });
+  document.getElementById('reveal-platform').addEventListener('click', () => {
+    platform.type = platform.type === 'password' ? 'text' : 'password';
+  });
   document.querySelectorAll('.seg').forEach((b) => b.addEventListener('click', () => {
     vscode.postMessage({ type: 'setScope', scope: b.dataset.scope });
   }));

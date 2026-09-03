@@ -5,6 +5,7 @@
 import { Finding, Severity, SEV_RANK, SEVERITY_ORDER } from '../api/types'
 import { ScanOutcome, summarize } from '../api/client'
 import { MLAB_CSS } from './theme'
+import { epssLabel, urgencyOf } from '../api/intel'
 
 export interface RenderOpts {
   nonce: string
@@ -88,6 +89,16 @@ export function reportHtml(
     .join('')
 
   const banners: string[] = []
+  const exploited = findings.filter((f) => urgencyOf(f.intel) === 'exploited')
+  if (exploited.length) {
+    const list = exploited.map((f) => esc(f.cve)).slice(0, 8).join(', ')
+    banners.push(
+      `<div class="banner danger"><span>&#9888;</span><span><strong>${exploited.length} ` +
+        `${exploited.length === 1 ? 'advisory is' : 'advisories are'} listed as actively exploited</strong> ` +
+        `in a known exploited vulnerabilities catalogue: ${list}` +
+        `${exploited.length > 8 ? ' and more' : ''}. Treat these first, whatever their CVSS band says.</span></div>`,
+    )
+  }
   if (scannedAt !== undefined) {
     banners.push(
       `<div class="banner info"><span>&#8505;</span><span>Cached result, scanned ${esc(
@@ -126,12 +137,21 @@ export function reportHtml(
 
   let table = ''
   if (!clean) {
+    // Known exploited first: that is the only signal that says attacks are
+    // actually happening, so it outranks the severity band.
+    const rank = (f: Finding): number => (urgencyOf(f.intel) === 'exploited' ? 1 : 0)
     const rows = [...findings]
-      .sort((a, b) => SEV_RANK[b.severity] - SEV_RANK[a.severity] || a.pkg.localeCompare(b.pkg))
+      .sort(
+        (a, b) =>
+          rank(b) - rank(a) ||
+          SEV_RANK[b.severity] - SEV_RANK[a.severity] ||
+          (b.intel?.epssScore ?? 0) - (a.intel?.epssScore ?? 0) ||
+          a.pkg.localeCompare(b.pkg),
+      )
       .map(rowHtml)
       .join('')
     table = `<div class="card"><table>
-      <thead><tr><th>Severity</th><th>Package</th><th>Advisory</th><th>Fixed in</th><th>Summary</th></tr></thead>
+      <thead><tr><th>Severity</th><th>Package</th><th>Advisory</th><th>Exploit</th><th>Fixed in</th><th>Summary</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`
   }
@@ -147,6 +167,24 @@ export function reportHtml(
   return shell(body, opts)
 }
 
+/** The exploitation cell: catalogue membership first, then EPSS. */
+function exploitCell(f: Finding): string {
+  const intel = f.intel
+  if (!intel) return '<span class="muted">&mdash;</span>'
+  const epss = epssLabel(intel)
+  const bits: string[] = []
+  if (intel.inKev || intel.inEuKev) {
+    const which = intel.inKev ? 'CISA KEV' : 'EU KEV'
+    const since = intel.kevDateAdded ? ` since ${esc(intel.kevDateAdded)}` : ''
+    bits.push(`<span class="kev" title="Actively exploited${since}">${which}</span>`)
+  }
+  if (epss) {
+    const hot = (intel.epssScore ?? 0) >= 0.1 ? ' hot' : ''
+    bits.push(`<span class="epss${hot}" title="Probability of exploitation in the next 30 days">${epss}</span>`)
+  }
+  return bits.length ? bits.join(' ') : '<span class="muted">&mdash;</span>'
+}
+
 function rowHtml(f: Finding): string {
   const cveCell = f.url ? `<a class="mono" href="${esc(f.url)}">${esc(f.cve)}</a>` : `<span class="mono">${esc(f.cve)}</span>`
   const fixed = f.fixedVersion ? `<span class="fixpill mono">${esc(f.fixedVersion)}</span>` : '<span class="muted">none</span>'
@@ -155,6 +193,7 @@ function rowHtml(f: Finding): string {
     <td><span class="sev sev-${f.severity}">${f.severity}</span></td>
     <td><code>${esc(f.pkg)}</code></td>
     <td>${cveCell}</td>
+    <td class="exploit">${exploitCell(f)}</td>
     <td>${fixed}</td>
     <td class="sum">${summary}</td>
   </tr>`
@@ -221,6 +260,21 @@ td.sum { max-width: 42ch; color: var(--vscode-descriptionForeground); }
   display: inline-block; padding: 1px 8px; border-radius: var(--mlab-radius-pill);
   background: rgba(34, 197, 94, 0.14); color: #22c55e; font-size: 0.82em; font-weight: 600;
 }
+
+td.exploit { white-space: nowrap; }
+.kev {
+  display: inline-block; padding: 1px 8px; border-radius: var(--mlab-radius-pill);
+  background: rgba(220, 38, 38, 0.16); color: var(--sev-critical);
+  font-family: var(--mlab-mono); font-size: 0.7rem; font-weight: 700;
+  letter-spacing: 0.03em; text-transform: uppercase;
+}
+.epss {
+  display: inline-block; padding: 1px 7px; border-radius: var(--mlab-radius-pill);
+  background: rgba(127, 127, 127, 0.12); color: var(--vscode-descriptionForeground);
+  font-family: var(--mlab-mono); font-size: 0.76em; font-weight: 600;
+}
+.epss.hot { background: rgba(234, 88, 12, 0.16); color: var(--sev-high); }
+.banner.danger { background: rgba(220, 38, 38, 0.12); border-color: rgba(220, 38, 38, 0.28); }
 
 footer { margin-top: 22px; padding-top: 14px; border-top: var(--mlab-hairline); }
 

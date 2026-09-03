@@ -24,16 +24,23 @@ export const CONFIG_FILENAME = 'config.json'
 
 export interface MlabConfig {
   apiUrl: string
+  /** Base of the mlab platform API, used for indicator lookups. */
+  platformUrl: string
   severityFloor: 'any' | 'low' | 'medium' | 'high' | 'critical'
   timeoutMs: number
   autoScan: boolean
+  cveHover: boolean
+  analyzeSelection: boolean
 }
 
 export const DEFAULTS: MlabConfig = {
   apiUrl: 'https://vuln.mlab.sh/api/v2/scan',
+  platformUrl: 'https://mlab.sh/api/v1',
   severityFloor: 'any',
   timeoutMs: 30000,
   autoScan: true,
+  cveHover: true,
+  analyzeSelection: true,
 }
 
 /** Which layer a value came from, so the UI can say so out loud. */

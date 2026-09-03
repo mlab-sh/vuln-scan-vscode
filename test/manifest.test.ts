@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   LOCKFILES,
@@ -97,4 +97,29 @@ test('the manifest declares an activation event covering every lockfile', () => 
   for (const name of SUPPORTED_BASENAMES) {
     assert.ok(workspaceContains.includes(name), `${name} missing from the activation glob`)
   }
+})
+
+// ── The test workspace keeps up with the source ──────────────────────────────
+
+test('every supported lockfile has a fixture to exercise it', () => {
+  const dir = join(process.cwd(), 'test', 'fixtures')
+  const present = readdirSync(dir)
+  for (const name of SUPPORTED_BASENAMES) {
+    assert.ok(
+      present.includes(name),
+      `${name} is supported but has no fixture in test/fixtures. Add one so F5 can exercise it.`,
+    )
+  }
+})
+
+test('the fixtures include the cases the exclude glob must reject', () => {
+  const dir = join(process.cwd(), 'test', 'fixtures')
+  assert.ok(
+    existsSync(join(dir, 'node_modules', 'leftpad', 'package-lock.json')),
+    'a lockfile inside node_modules is what proves the exclude glob works',
+  )
+  assert.ok(
+    existsSync(join(dir, 'nested', 'deep', 'Cargo.lock')),
+    'a nested lockfile is what proves the sweep recurses',
+  )
 })
