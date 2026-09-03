@@ -45,7 +45,7 @@ export class ReportPanel {
     }
     const panel = vscode.window.createWebviewPanel(
       'mlab.report',
-      'vuln.mlab.sh Scan report',
+      'mlab scan report',
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
       {
         enableScripts: true,

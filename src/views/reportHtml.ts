@@ -24,7 +24,7 @@ function brand(opts: RenderOpts): string {
   const tile = opts.logoUri
     ? `<img class="tile" src="${esc(opts.logoUri)}" alt="" width="18" height="18" />`
     : `<span class="tile"></span>`
-  return `<div class="brand">${tile}<span>vuln.mlab.sh</span></div>`
+  return `<div class="brand">${tile}<span>mlab</span></div>`
 }
 
 function shell(body: string, opts: RenderOpts, script = ''): string {

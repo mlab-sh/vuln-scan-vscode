@@ -1,7 +1,8 @@
 import * as vscode from 'vscode'
 import { basenameOf, detectFormat, isSupportedLockfile } from './detect'
 import { ReportPanel } from './views/reportPanel'
-import { TokenPanel } from './views/tokenPanel'
+import { HomePanel } from './views/homePanel'
+import { FindingsTree } from './views/findingsTree'
 import { scanLockfile, ScanError, summarize } from './api/client'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -15,12 +16,17 @@ const PRIVACY_KEY = 'mlab.privacyConsent'
 
 let output: vscode.OutputChannel
 let ctx: vscode.ExtensionContext
-let lastScanned: vscode.Uri | undefined
+let tree: FindingsTree
+let view: vscode.TreeView<unknown>
 
 export function activate(context: vscode.ExtensionContext): void {
   ctx = context
   output = vscode.window.createOutputChannel('mlab')
   context.subscriptions.push(output)
+
+  tree = new FindingsTree()
+  view = vscode.window.createTreeView('mlab.findings', { treeDataProvider: tree })
+  context.subscriptions.push(view)
 
   const register = (id: string, fn: (...args: any[]) => any) =>
     context.subscriptions.push(vscode.commands.registerCommand(id, fn))
@@ -28,10 +34,22 @@ export function activate(context: vscode.ExtensionContext): void {
   register('mlab.checkLockfile', (resource?: vscode.Uri) => checkLockfile(resource))
   register('mlab.scanWorkspace', () => scanWorkspace())
   register('mlab.rescan', () => rescan())
-  register('mlab.clearResults', () => stub('Clear results'))
+  register('mlab.clearResults', () => clearResults())
   register('mlab.setToken', () => setToken())
   register('mlab.clearToken', () => clearToken())
-  register('mlab.manageToken', () => TokenPanel.show(ctx))
+  register('mlab.openHome', () => HomePanel.show(ctx))
+  register('mlab.manageToken', () => HomePanel.show(ctx))
+
+  // Make the empty state explicit rather than relying on an unset context key,
+  // so the Rescan and Clear buttons are hidden until there is something to act on.
+  syncView()
+}
+
+/** Keep the view badge and title in step with what the tree holds. */
+function syncView(): void {
+  const n = tree.totalFindings
+  view.badge = n > 0 ? { value: n, tooltip: `${n} finding${n === 1 ? '' : 's'}` } : undefined
+  vscode.commands.executeCommand('setContext', 'mlab.hasResults', !tree.isEmpty)
 }
 
 export function deactivate(): void {
@@ -84,7 +102,8 @@ async function checkLockfile(resource?: vscode.Uri): Promise<void> {
       signal: controller.signal,
     })
 
-    lastScanned = uri
+    tree.record(uri, filename, outcome)
+    syncView()
     panel.report(filename, outcome)
 
     const line = summarize(outcome)
@@ -99,12 +118,23 @@ async function checkLockfile(resource?: vscode.Uri): Promise<void> {
   }
 }
 
+// Rescans every lockfile currently in the tree, one at a time. Each one spends a
+// scan from the hourly quota, which is why this is only ever reachable from an
+// explicit click on the Rescan button.
 async function rescan(): Promise<void> {
-  if (!lastScanned) {
+  const uris = tree.scannedUris()
+  if (uris.length === 0) {
     vscode.window.showInformationMessage('mlab: nothing to rescan yet. Run a scan first.')
     return
   }
-  await checkLockfile(lastScanned)
+  for (const uri of uris) await checkLockfile(uri)
+}
+
+function clearResults(): void {
+  if (tree.isEmpty) return
+  tree.clear()
+  syncView()
+  output.appendLine('[tree] results cleared')
 }
 
 // ── Error handling ───────────────────────────────────────────────────────────
@@ -169,7 +199,7 @@ async function ensurePrivacyConsent(): Promise<boolean> {
 // ── Token management (SecretStorage) ─────────────────────────────────────────
 async function setToken(): Promise<void> {
   const token = await vscode.window.showInputBox({
-    title: 'vuln.mlab.sh API token',
+    title: 'mlab API token',
     prompt: 'Stored securely in SecretStorage. Never written to settings or the workspace.',
     password: true,
     ignoreFocusOut: true,
@@ -197,12 +227,6 @@ async function scanWorkspace(): Promise<void> {
   const found = await vscode.workspace.findFiles(includes, excludes)
   const list = found.map((u) => basenameOf(u.fsPath)).join(', ') || '(none)'
   const msg = `mlab (stub): found ${found.length} lockfile(s): ${list}`
-  output.appendLine(msg)
-  vscode.window.showInformationMessage(msg)
-}
-
-function stub(label: string): void {
-  const msg = `mlab (stub): "${label}" is not implemented yet.`
   output.appendLine(msg)
   vscode.window.showInformationMessage(msg)
 }

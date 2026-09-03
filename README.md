@@ -1,7 +1,7 @@
-# vuln.mlab.sh SBOM scan
+# mlab security
 
 Scan your lockfiles for known CVEs from inside VS Code, on demand, powered by
-[vuln.mlab.sh](https://vuln.mlab.sh). Parsing and vulnerability resolution happen
+[mlab](https://vuln.mlab.sh). Parsing and vulnerability resolution happen
 entirely server side: the extension only uploads the lockfile you pick and shows
 the result. No local database, no heavy dependencies.
 
@@ -47,7 +47,13 @@ with a **Cancel** button, then the final report.
   short summary.
 - A progress state that is genuinely cancellable: cancelling aborts the in-flight
   HTTP request.
-- A shield entry in the Activity Bar for the results view.
+- An **mlab** entry in the Activity Bar holding the findings tree, grouped
+  lockfile -> severity -> advisory, with a badge showing the total finding count.
+  Clicking a lockfile opens it; clicking an advisory opens its CVE page.
+- A full width **mlab** page (`mlab: Open mlab`, or the home button in the view
+  title bar) with your quota status, the API token, the scan entry points and a
+  jump to the native settings editor. The Activity Bar icon can only ever open a
+  sidebar, so results live there and everything else lives on this page.
 
 ## Supported lockfiles
 
@@ -110,7 +116,12 @@ npm run test       # unit tests
 npm run package    # produce a .vsix
 ```
 
-Press `F5` to launch an Extension Development Host on `test/fixtures`.
+Press `F5` to launch an Extension Development Host on `test/fixtures`. It runs
+`npm: watch`, so sources rebuild on change with sourcemaps; press `Cmd+R` in that
+window to reload the extension. Useful commands from its Command Palette:
+`Developer: Reload Window`, `Developer: Show Running Extensions`, and
+`Developer: Open Webview Developer Tools` to inspect the report and home panels
+(webview code runs in its own context, so the Node debugger cannot see it).
 
 ## License
 
