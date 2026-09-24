@@ -3,6 +3,16 @@
 All notable changes to this extension are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.2] - 2026-09-24
+
+### Changed
+
+- Explorer colors now follow the worst severity of a lockfile: red for high or
+  critical, orange for medium, blue for low or unknown (was orange).
+- Low and unknown findings are now reported as information instead of warnings,
+  so the Problems panel and the Explorer no longer paint them yellow. With this,
+  `mlab.severityFloor: "low"` has no practical effect anymore.
+
 ## [1.0.1] - 2026-09-03
 
 First release since 0.1.0, and a large one. Two things change behaviour rather
@@ -211,5 +221,6 @@ Initial release.
 - Settings: `mlab.apiUrl`, `mlab.severityFloor`, `mlab.timeoutMs`.
 - mlab-branded UI derived from the vuln.mlab.sh design system.
 
+[1.0.2]: https://github.com/mlab-sh/vuln-scan-vscode/releases/tag/v1.0.2
 [1.0.1]: https://github.com/mlab-sh/vuln-scan-vscode/releases/tag/v1.0.1
 [0.1.0]: https://github.com/mlab-sh/vuln-scan-vscode/releases/tag/v0.1.0

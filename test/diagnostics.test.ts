@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { levelFor, locateLine, FLOOR_RANK } from '../src/diagnosticsCore'
-import { Severity, SEVERITY_ORDER } from '../src/api/types'
+import { Severity } from '../src/api/types'
 
 // `npm test` runs from the package root, and tsconfig targets CommonJS, so
 // import.meta is not available here.
@@ -12,18 +12,12 @@ const fixture = (name: string) =>
 
 // ── severityFloor mapping ────────────────────────────────────────────────────
 
-test('the default floor "any" demotes nothing', () => {
-  for (const sev of SEVERITY_ORDER) {
-    assert.notEqual(levelFor(sev, 'any'), 'information', `${sev} should not be demoted`)
-  }
-})
-
-test('critical and high are errors, the rest warnings, at or above the floor', () => {
+test('critical and high are errors, medium warnings, low and unknown information', () => {
   assert.equal(levelFor('critical', 'any'), 'error')
   assert.equal(levelFor('high', 'any'), 'error')
   assert.equal(levelFor('medium', 'any'), 'warning')
-  assert.equal(levelFor('low', 'any'), 'warning')
-  assert.equal(levelFor('unknown', 'any'), 'warning')
+  assert.equal(levelFor('low', 'any'), 'information')
+  assert.equal(levelFor('unknown', 'any'), 'information')
 })
 
 test('findings below the floor are demoted to information', () => {
@@ -43,7 +37,7 @@ test('a floor of critical leaves only critical undemoted', () => {
 })
 
 test('an unknown floor value behaves like "any" rather than hiding findings', () => {
-  assert.equal(levelFor('low', 'nonsense'), 'warning')
+  assert.equal(levelFor('medium', 'nonsense'), 'warning')
 })
 
 test('every floor declared in the manifest enum is ranked', () => {

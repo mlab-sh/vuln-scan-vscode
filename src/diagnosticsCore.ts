@@ -19,15 +19,16 @@ export const FLOOR_RANK: Record<string, number> = {
 /**
  * Map a finding's severity to a diagnostic level, given the configured floor.
  *
- * At or above the floor, critical and high read as errors and the rest as
- * warnings. Below the floor everything is demoted to information, which is
+ * At or above the floor, critical and high read as errors, medium as warnings,
+ * and low/unknown as information (so the Explorer paints them blue, not yellow). Below the floor everything is demoted to information, which is
  * exactly what `mlab.severityFloor` promises. Nothing here ever fails a build.
  */
 export function levelFor(finding: Severity, floor: string): DiagLevel {
   const rank = SEV_RANK[finding] ?? 0
   const min = FLOOR_RANK[floor] ?? 0
   if (rank < min) return 'information'
-  return rank >= SEV_RANK.high ? 'error' : 'warning'
+  if (rank >= SEV_RANK.high) return 'error'
+  return rank >= SEV_RANK.medium ? 'warning' : 'information'
 }
 
 /** Zero-based position of a package declaration inside a lockfile. */

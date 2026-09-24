@@ -2,7 +2,7 @@
   "name": "vuln-scan",
   "displayName": "mlab security",
   "description": "CVE scanning for your lockfiles, powered by mlab. Nothing is uploaded until you agree once; after that, changed lockfiles are rescanned automatically and results are cached per content.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "mlab-sh",
   "license": "MIT",
   "repository": {

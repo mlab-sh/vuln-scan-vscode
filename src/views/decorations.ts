@@ -1,7 +1,8 @@
 import * as vscode from 'vscode'
 import { ScanCache } from '../cache'
 
-// Colors a lockfile red in the Explorer when its last scan found vulnerabilities.
+// Colors a lockfile in the Explorer by the worst severity its last scan found:
+// red for high/critical, orange for medium, blue for low/unknown.
 //
 // The decoration is driven purely by the cache, and the cache is keyed by file
 // content, so the file stays red for exactly as long as the vulnerable content
@@ -41,7 +42,9 @@ export class LockfileDecorations implements vscode.FileDecorationProvider {
       color: new vscode.ThemeColor(
         sev === 'critical' || sev === 'high'
           ? 'list.errorForeground'
-          : 'list.warningForeground',
+          : sev === 'medium'
+            ? 'list.warningForeground'
+            : 'editorInfo.foreground',
       ),
       propagate: false,
     }
