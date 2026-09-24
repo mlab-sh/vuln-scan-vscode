@@ -1,5 +1,5 @@
 import * as vscode from 'vscode'
-import { MLAB_CSS } from './theme'
+import { mlabCss } from './theme'
 import { esc } from './reportHtml'
 import { IndicatorReport, worstSeverity } from '../api/indicator'
 import { IndicatorKind, kindLabel } from '../ioc'
@@ -22,9 +22,13 @@ export class IndicatorPanel {
   private static current: IndicatorPanel | undefined
   private readonly panel: vscode.WebviewPanel
   private disposed = false
+  private readonly fontsUri: string
 
-  private constructor(panel: vscode.WebviewPanel) {
+  private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
     this.panel = panel
+    this.fontsUri = panel.webview
+      .asWebviewUri(vscode.Uri.joinPath(extensionUri, 'resources', 'fonts'))
+      .toString()
     panel.onDidDispose(() => {
       this.disposed = true
       if (IndicatorPanel.current === this) IndicatorPanel.current = undefined
@@ -43,7 +47,7 @@ export class IndicatorPanel {
       { enableScripts: false, localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'resources')] },
     )
     panel.iconPath = vscode.Uri.joinPath(extensionUri, 'resources', 'icon.png')
-    IndicatorPanel.current = new IndicatorPanel(panel)
+    IndicatorPanel.current = new IndicatorPanel(panel, extensionUri)
     return IndicatorPanel.current
   }
 
@@ -78,9 +82,9 @@ export class IndicatorPanel {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${n}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; font-src ${this.panel.webview.cspSource}; style-src 'unsafe-inline'; script-src 'nonce-${n}';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>${MLAB_CSS}${STYLE}</style>
+<style>${mlabCss(this.fontsUri)}${STYLE}</style>
 </head>
 <body><main>${body}</main></body>
 </html>`

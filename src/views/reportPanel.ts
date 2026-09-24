@@ -26,6 +26,7 @@ export class ReportPanel {
   private static current: ReportPanel | undefined
   private readonly panel: vscode.WebviewPanel
   private readonly logoUri: string
+  private readonly fontsUri: string
   private disposed = false
   private cancelHandler: (() => void) | undefined
   /** Incremented per scan; a stale generation may no longer write to the panel. */
@@ -35,6 +36,9 @@ export class ReportPanel {
     this.panel = panel
     this.logoUri = panel.webview
       .asWebviewUri(vscode.Uri.joinPath(extensionUri, 'resources', 'icon.png'))
+      .toString()
+    this.fontsUri = panel.webview
+      .asWebviewUri(vscode.Uri.joinPath(extensionUri, 'resources', 'fonts'))
       .toString()
     this.panel.onDidDispose(() => {
       this.disposed = true
@@ -66,7 +70,12 @@ export class ReportPanel {
   }
 
   private opts(): RenderOpts {
-    return { nonce: nonce(), cspSource: this.panel.webview.cspSource, logoUri: this.logoUri }
+    return {
+      nonce: nonce(),
+      cspSource: this.panel.webview.cspSource,
+      logoUri: this.logoUri,
+      fontsUri: this.fontsUri,
+    }
   }
 
   /**

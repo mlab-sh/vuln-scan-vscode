@@ -1,5 +1,5 @@
 import * as vscode from 'vscode'
-import { MLAB_CSS } from './theme'
+import { mlabCss } from './theme'
 import { esc } from './reportHtml'
 import { SUPPORTED_BASENAMES } from '../detect'
 import * as config from '../config'
@@ -316,6 +316,9 @@ export class HomePanel {
     const logo = this.panel.webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'resources', 'icon.png'),
     )
+    const fonts = this.panel.webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'resources', 'fonts'),
+    )
 
     const status = hasToken
       ? `<div class="status ok"><span class="dot"></span><div><strong>Token set.</strong> You have <strong>25 scans/hour</strong>.</div></div>`
@@ -331,9 +334,9 @@ export class HomePanel {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${this.panel.webview.cspSource}; style-src 'unsafe-inline'; script-src 'nonce-${n}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${this.panel.webview.cspSource}; font-src ${this.panel.webview.cspSource}; style-src 'unsafe-inline'; script-src 'nonce-${n}';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>${MLAB_CSS}${STYLE}</style>
+<style>${mlabCss(fonts.toString())}${STYLE}</style>
 </head>
 <body>
   <main>

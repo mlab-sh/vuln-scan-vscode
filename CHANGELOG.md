@@ -14,6 +14,10 @@ All notable changes to this extension are documented here. The format is based o
 
 ### Changed
 
+- **The report and the other mlab pages now match vuln.mlab.sh**: same layout as
+  the site's scan result (verdict card, stats row, findings table), same
+  surfaces, amber accent, charcoal buttons, and Inter / JetBrains Mono shipped
+  with the extension. Light or dark follows the VS Code theme.
 - Explorer colors now follow the worst severity of a lockfile: red for high or
   critical, orange for medium, blue for low or unknown (was orange).
 - Low and unknown findings are now reported as information instead of warnings,
