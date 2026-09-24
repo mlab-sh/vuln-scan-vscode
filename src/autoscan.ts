@@ -17,7 +17,7 @@ export const DEBOUNCE_MS = 4000
 
 export class AutoScanner {
   private watcher: vscode.FileSystemWatcher | undefined
-  private readonly timers = new Map<string, NodeJS.Timeout>()
+  private readonly timers = new Map<string, ReturnType<typeof setTimeout>>()
   private disposed = false
 
   constructor(private readonly onChanged: (uri: vscode.Uri) => void) {}

@@ -1,6 +1,4 @@
 import * as vscode from 'vscode'
-import * as fs from 'fs'
-import * as path from 'path'
 import {
   basenameOf,
   detectFormat,
@@ -12,7 +10,7 @@ import { ReportPanel } from './views/reportPanel'
 import { HomePanel, onSettingsWritten } from './views/homePanel'
 import { FindingsTree } from './views/findingsTree'
 import { LockfileDecorations } from './views/decorations'
-import { ScanCache, hashOf } from './cache'
+import { ScanCache, hashOf, keyOf } from './cache'
 import { IntelCache } from './intelCache'
 import { fetchMany } from './api/intel'
 import { CveHover } from './views/cveHover'
@@ -48,8 +46,11 @@ let autoScanner: AutoScanner
 let diagnostics: LockfileDiagnostics
 let intelCache: IntelCache
 
-export function activate(context: vscode.ExtensionContext): void {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
   ctx = context
+  // The `.mlab` files are read asynchronously, so load them before anything
+  // below asks for a setting.
+  await config.load()
   output = vscode.window.createOutputChannel('mlab')
   context.subscriptions.push(output)
 
@@ -62,10 +63,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   intelCache = new IntelCache(context.globalState)
   // Works on any file: CVE ids turn up in comments and changelogs, not just
-  // in the lockfiles this extension scans.
-  context.subscriptions.push(
-    vscode.languages.registerHoverProvider({ scheme: 'file' }, new CveHover(intelCache)),
-  )
+  // in the lockfiles this extension scans. Any scheme too, so github.dev
+  // (`vscode-vfs`) and vscode.dev folders are covered.
+  context.subscriptions.push(vscode.languages.registerHoverProvider('*', new CveHover(intelCache)))
 
   cache = new ScanCache(context.globalState)
   // Drop anything past retention as soon as the cache is opened, so storage does
@@ -143,24 +143,21 @@ export function activate(context: vscode.ExtensionContext): void {
  * folder are pruned, so a deleted lockfile does not linger forever.
  */
 async function rehydrate(): Promise<void> {
-  const folders = vscode.workspace.workspaceFolders ?? []
-  const roots = folders.filter((f) => f.uri.scheme === 'file').map((f) => f.uri.fsPath)
-
   let restored = 0
-  for (const fsPath of cache.paths()) {
-    const inWorkspace = roots.some(
-      (root) => fsPath === root || fsPath.startsWith(root + path.sep),
-    )
-    if (!inWorkspace) continue
+  for (const key of cache.paths()) {
+    const uri = uriOf(key)
+    if (!vscode.workspace.getWorkspaceFolder(uri)) continue
 
-    if (!fs.existsSync(fsPath)) {
-      await cache.forget(fsPath)
+    try {
+      await vscode.workspace.fs.stat(uri)
+    } catch {
+      await cache.forget(key)
       continue
     }
-    const entry = cache.peek(fsPath)
+    const entry = cache.peek(key)
     if (!entry) continue
-    tree.record(vscode.Uri.file(fsPath), entry.filename, entry.outcome)
-    await setDiagnosticsFor(vscode.Uri.file(fsPath), entry.outcome)
+    tree.record(uri, entry.filename, entry.outcome)
+    await setDiagnosticsFor(uri, entry.outcome)
     restored++
   }
 
@@ -171,6 +168,11 @@ async function rehydrate(): Promise<void> {
   }
 }
 
+/** Inverse of keyOf: a plain path is a local file, anything else a full URI. */
+function uriOf(key: string): vscode.Uri {
+  return /^[a-z][a-z0-9+.-]+:\/\//i.test(key) ? vscode.Uri.parse(key) : vscode.Uri.file(key)
+}
+
 /**
  * Publish diagnostics for a lockfile we are not currently scanning, so it needs
  * to read the file back. Failures are silent: a missing lockfile just means no
@@ -179,7 +181,7 @@ async function rehydrate(): Promise<void> {
 async function setDiagnosticsFor(uri: vscode.Uri, outcome: ScanOutcome): Promise<void> {
   try {
     const body = await vscode.workspace.fs.readFile(uri)
-    diagnostics.set(uri, Buffer.from(body).toString('utf8'), outcome)
+    diagnostics.set(uri, new TextDecoder().decode(body), outcome)
   } catch {
     // The file is gone or unreadable; nothing to anchor a diagnostic on.
   }
@@ -187,9 +189,9 @@ async function setDiagnosticsFor(uri: vscode.Uri, outcome: ScanOutcome): Promise
 
 /** Re-publish every diagnostic, e.g. after `severityFloor` changed. */
 async function refreshDiagnostics(): Promise<void> {
-  for (const fsPath of cache.paths()) {
-    const entry = cache.peek(fsPath)
-    if (entry) await setDiagnosticsFor(vscode.Uri.file(fsPath), entry.outcome)
+  for (const key of cache.paths()) {
+    const entry = cache.peek(key)
+    if (entry) await setDiagnosticsFor(uriOf(key), entry.outcome)
   }
 }
 
@@ -242,10 +244,10 @@ async function performScan(uri: vscode.Uri, opts: ScanOpts): Promise<ScanResult>
     output.appendLine(`[error] ${filename}: unreadable: ${err instanceof Error ? err.message : err}`)
     return { kind: 'skipped', reason: 'unreadable' }
   }
-  const hash = hashOf(body)
-  const text = Buffer.from(body).toString('utf8')
+  const hash = await hashOf(body)
+  const text = new TextDecoder().decode(body)
 
-  const hit = cache.lookup(uri.fsPath, hash)
+  const hit = cache.lookup(keyOf(uri), hash)
   if (hit) {
     publish(uri, filename, text, hit.outcome)
     output.appendLine(`[cache] ${filename}: ${summarize(hit.outcome)} (unchanged since last scan)`)
@@ -291,7 +293,7 @@ async function performScan(uri: vscode.Uri, opts: ScanOpts): Promise<ScanResult>
     })
 
     await enrich(outcome, controller.signal)
-    await cache.put(uri.fsPath, filename, hash, outcome)
+    await cache.put(keyOf(uri), filename, hash, outcome)
     publish(uri, filename, text, outcome)
     panel?.report(filename, outcome, undefined, panelToken)
     output.appendLine(`[${label}] ${filename}: ${summarize(outcome)}`)
@@ -381,7 +383,7 @@ async function checkLockfile(resource?: vscode.Uri, opts: ScanOpts = {}): Promis
     ReportPanel.show(ctx.extensionUri).report(
       filename,
       result.outcome,
-      cache.peek(uri.fsPath)?.at,
+      cache.peek(keyOf(uri))?.at,
     )
   }
 
@@ -519,7 +521,7 @@ async function showReport(resource?: vscode.Uri): Promise<void> {
     return
   }
 
-  const entry = cache.peek(uri.fsPath)
+  const entry = cache.peek(keyOf(uri))
   if (!entry) {
     const scan = 'Scan now'
     const choice = await vscode.window.showInformationMessage(
@@ -677,7 +679,7 @@ async function scanWorkspace(): Promise<void> {
     let hit = false
     try {
       const body = await vscode.workspace.fs.readFile(uri)
-      hit = cache.lookup(uri.fsPath, hashOf(body)) !== undefined
+      hit = cache.lookup(keyOf(uri), await hashOf(body)) !== undefined
     } catch {
       hit = false
     }

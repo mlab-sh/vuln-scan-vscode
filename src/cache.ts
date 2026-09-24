@@ -1,4 +1,4 @@
-import * as crypto from 'crypto'
+import { sha256Hex } from './platform'
 import { ScanOutcome } from './api/client'
 
 // Persistent scan cache, keyed by the SHA-256 of the lockfile's bytes.
@@ -60,7 +60,7 @@ export function expiredKeys(
 export interface CacheEntry {
   /** SHA-256 of the lockfile bytes at scan time. */
   hash: string
-  /** Absolute path, for the Explorer decoration and for reporting. */
+  /** The cache key (see keyOf), for the Explorer decoration and for reporting. */
   fsPath: string
   filename: string
   findingCount: number
@@ -69,8 +69,17 @@ export interface CacheEntry {
   at: number
 }
 
-export function hashOf(body: Uint8Array): string {
-  return crypto.createHash('sha256').update(body).digest('hex')
+export function hashOf(body: Uint8Array): Promise<string> {
+  return sha256Hex(body)
+}
+
+/**
+ * Cache key for a file. Local files keep their plain path, which is what every
+ * existing cache already holds. Anything else (github.dev's `vscode-vfs`, ...)
+ * uses the full URI, since its path alone does not say where it lives.
+ */
+export function keyOf(uri: { scheme: string; fsPath: string; toString(): string }): string {
+  return uri.scheme === 'file' ? uri.fsPath : uri.toString()
 }
 
 export class ScanCache {

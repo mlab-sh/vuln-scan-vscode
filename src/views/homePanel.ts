@@ -228,7 +228,7 @@ export class HomePanel {
           break
         }
         try {
-          config.write(desc.key as keyof config.MlabConfig, parsed as never, this.scope)
+          await config.write(desc.key as keyof config.MlabConfig, parsed as never, this.scope)
         } catch (err) {
           vscode.window.showWarningMessage(
             `mlab: ${err instanceof Error ? err.message : 'could not write the config file.'}`,

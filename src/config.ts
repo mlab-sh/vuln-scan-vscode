@@ -1,7 +1,5 @@
 import * as vscode from 'vscode'
-import * as fs from 'fs'
-import * as os from 'os'
-import * as path from 'path'
+import { homeDir } from './platform'
 
 // Layered configuration for mlab.
 //
@@ -11,7 +9,7 @@ import * as path from 'path'
 //
 // Precedence, highest first:
 //   1. <workspace>/.mlab/config.json   committed with the repo, team wide
-//   2. ~/.mlab/config.json             personal, all workspaces
+//   2. ~/.mlab/config.json             personal, all workspaces (desktop only)
 //   3. VS Code settings `mlab.*`       what existing installs already use
 //   4. built in defaults
 //
@@ -54,29 +52,32 @@ export interface Resolved<K extends keyof MlabConfig> {
 }
 
 // ── File locations ───────────────────────────────────────────────────────────
-/** `<first workspace folder>/.mlab/config.json`, or undefined with no folder. */
-export function workspaceConfigPath(): string | undefined {
-  const folder = vscode.workspace.workspaceFolders?.[0]
-  if (!folder || folder.uri.scheme !== 'file') return undefined
-  return path.join(folder.uri.fsPath, CONFIG_DIRNAME, CONFIG_FILENAME)
-}
-
-/** `~/.mlab/config.json`. */
-export function userConfigPath(): string {
-  return path.join(os.homedir(), CONFIG_DIRNAME, CONFIG_FILENAME)
-}
-
-function pathFor(scope: Scope): string | undefined {
-  return scope === 'workspace' ? workspaceConfigPath() : userConfigPath()
+// `<first workspace folder>/.mlab/config.json` and `~/.mlab/config.json`. Either
+// can be missing: no folder open, or no home directory at all in the browser.
+function uriFor(scope: Scope): vscode.Uri | undefined {
+  if (scope === 'workspace') {
+    const folder = vscode.workspace.workspaceFolders?.[0]
+    return folder && vscode.Uri.joinPath(folder.uri, CONFIG_DIRNAME, CONFIG_FILENAME)
+  }
+  const home = homeDir()
+  return home === undefined
+    ? undefined
+    : vscode.Uri.joinPath(vscode.Uri.file(home), CONFIG_DIRNAME, CONFIG_FILENAME)
 }
 
 // ── Reading ──────────────────────────────────────────────────────────────────
+// The files are read through `workspace.fs`, which is async, while `get()` is
+// called synchronously all over the extension. So both files are held in a
+// snapshot, filled by `load()` at activation and refreshed by `watch()` and by
+// every write.
+let files: Record<Scope, Partial<MlabConfig>> = { workspace: {}, user: {} }
+
 /** Parse a config file, tolerating absence. Malformed JSON is surfaced once. */
-function readFile(file: string | undefined): Partial<MlabConfig> {
-  if (!file) return {}
+async function readFile(uri: vscode.Uri | undefined): Promise<Partial<MlabConfig>> {
+  if (!uri) return {}
   let text: string
   try {
-    text = fs.readFileSync(file, 'utf8')
+    text = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri))
   } catch {
     return {} // absent is the normal case, not an error
   }
@@ -85,18 +86,27 @@ function readFile(file: string | undefined): Partial<MlabConfig> {
     return parsed && typeof parsed === 'object' ? (parsed as Partial<MlabConfig>) : {}
   } catch (err) {
     vscode.window.showWarningMessage(
-      `mlab: ${file} is not valid JSON and was ignored. ${err instanceof Error ? err.message : ''}`,
+      `mlab: ${uri.fsPath} is not valid JSON and was ignored. ${err instanceof Error ? err.message : ''}`,
     )
     return {}
   }
 }
 
+/** (Re)read both config files into the snapshot. */
+export async function load(): Promise<void> {
+  const [workspace, user] = await Promise.all([
+    readFile(uriFor('workspace')),
+    readFile(uriFor('user')),
+  ])
+  files = { workspace, user }
+}
+
 /** Resolve one key through every layer, reporting which one won. */
 export function resolve<K extends keyof MlabConfig>(key: K): Resolved<K> {
-  const ws = readFile(workspaceConfigPath())
+  const ws = files.workspace
   if (ws[key] !== undefined) return { value: ws[key] as MlabConfig[K], layer: 'workspace-file' }
 
-  const user = readFile(userConfigPath())
+  const user = files.user
   if (user[key] !== undefined) return { value: user[key] as MlabConfig[K], layer: 'user-file' }
 
   const native = vscode.workspace.getConfiguration('mlab').inspect(key)
@@ -112,21 +122,39 @@ export function get<K extends keyof MlabConfig>(key: K): MlabConfig[K] {
 }
 
 // ── Writing ──────────────────────────────────────────────────────────────────
+async function writeJson(uri: vscode.Uri, data: object): Promise<void> {
+  await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(uri, '..'))
+  await vscode.workspace.fs.writeFile(
+    uri,
+    new TextEncoder().encode(JSON.stringify(data, null, 2) + '\n'),
+  )
+}
+
 /**
  * Write one key into the `.mlab/config.json` of the given scope, creating the
  * directory and file as needed. Existing unrelated keys are preserved.
+ *
+ * In the browser there is no home directory, so the user scope falls back to
+ * the VS Code user settings, which the browser does persist.
  */
-export function write<K extends keyof MlabConfig>(
+export async function write<K extends keyof MlabConfig>(
   key: K,
   value: MlabConfig[K],
   scope: Scope,
-): void {
-  const file = pathFor(scope)
-  if (!file) throw new Error('No workspace folder is open, so there is nowhere to write.')
-  const current = readFile(file)
-  const next = { ...current, [key]: value }
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, JSON.stringify(next, null, 2) + '\n', 'utf8')
+): Promise<void> {
+  const uri = uriFor(scope)
+  if (!uri) {
+    if (scope === 'workspace') {
+      throw new Error('No workspace folder is open, so there is nowhere to write.')
+    }
+    await vscode.workspace
+      .getConfiguration('mlab')
+      .update(key, value, vscode.ConfigurationTarget.Global)
+    return
+  }
+  const next = { ...(await readFile(uri)), [key]: value }
+  await writeJson(uri, next)
+  files[scope] = next
 }
 
 /**
@@ -136,14 +164,15 @@ export function write<K extends keyof MlabConfig>(
  */
 export async function reset<K extends keyof MlabConfig>(key: K): Promise<void> {
   for (const scope of ['workspace', 'user'] as Scope[]) {
-    const file = pathFor(scope)
-    if (!file) continue
-    const current = readFile(file)
+    const uri = uriFor(scope)
+    if (!uri) continue
+    const current = await readFile(uri)
     if (current[key] === undefined) continue
     delete current[key]
     try {
-      if (Object.keys(current).length === 0) fs.rmSync(file)
-      else fs.writeFileSync(file, JSON.stringify(current, null, 2) + '\n', 'utf8')
+      if (Object.keys(current).length === 0) await vscode.workspace.fs.delete(uri)
+      else await writeJson(uri, current)
+      files[scope] = current
     } catch {
       // Nothing to do: the file is already gone or not writable.
     }
@@ -165,22 +194,25 @@ export async function reset<K extends keyof MlabConfig>(key: K): Promise<void> {
  */
 export function watch(onChanged: () => void): vscode.Disposable {
   const subs: vscode.Disposable[] = []
+  const changed = () => void load().then(onChanged)
 
   const folder = vscode.workspace.workspaceFolders?.[0]
   if (folder) {
     const w = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(folder, `${CONFIG_DIRNAME}/${CONFIG_FILENAME}`),
     )
-    subs.push(w, w.onDidChange(onChanged), w.onDidCreate(onChanged), w.onDidDelete(onChanged))
+    subs.push(w, w.onDidChange(changed), w.onDidCreate(changed), w.onDidDelete(changed))
   }
 
   // The user file is outside every workspace folder, so it needs its own
-  // pattern rooted at the home directory.
-  const home = vscode.Uri.file(os.homedir())
-  const uw = vscode.workspace.createFileSystemWatcher(
-    new vscode.RelativePattern(home, `${CONFIG_DIRNAME}/${CONFIG_FILENAME}`),
-  )
-  subs.push(uw, uw.onDidChange(onChanged), uw.onDidCreate(onChanged), uw.onDidDelete(onChanged))
+  // pattern rooted at the home directory. No home, nothing to watch.
+  const home = homeDir()
+  if (home !== undefined) {
+    const uw = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(vscode.Uri.file(home), `${CONFIG_DIRNAME}/${CONFIG_FILENAME}`),
+    )
+    subs.push(uw, uw.onDidChange(changed), uw.onDidCreate(changed), uw.onDidDelete(changed))
+  }
 
   return vscode.Disposable.from(...subs)
 }

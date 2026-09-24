@@ -77,13 +77,15 @@ with a **Cancel** button, then the final report.
   short summary.
 - A progress state that is genuinely cancellable: cancelling aborts the in-flight
   HTTP request.
-- Lockfiles with known vulnerabilities are **marked red in the Explorer**, with a
-  badge for the worst severity. The mark is driven by the content-keyed cache, so
+- Lockfiles with known vulnerabilities are **colored in the Explorer** by their
+  worst severity (red for high or critical, orange for medium, blue for low or
+  unknown), with a badge for that severity. The mark is driven by the content-keyed cache, so
   it stays until the lockfile is actually patched.
 - **Diagnostics in the Problems panel**, one per finding, anchored on the line of
   the lockfile that declares the package. `mlab.severityFloor` decides how they
-  read: at or above the floor, critical and high are Errors and the rest are
-  Warnings; below it, findings are downgraded to Information. Nothing ever fails.
+  read: at or above the floor, critical and high are Errors, medium is a Warning
+  and low or unknown is Information; below it, findings are downgraded to
+  Information. Nothing ever fails.
 - **See vuln report** opens the last result for a lockfile straight from the
   cache, without any network call and without spending a scan. It is on the
   Explorer and editor context menus, and it is what clicking a lockfile in the
@@ -189,6 +191,36 @@ window to reload the extension. Useful commands from its Command Palette:
 `Developer: Reload Window`, `Developer: Show Running Extensions`, and
 `Developer: Open Webview Developer Tools` to inspect the report and home panels
 (webview code runs in its own context, so the Node debugger cannot see it).
+
+## Compatible editors
+
+Any editor that runs VS Code extensions with API 1.85 or later.
+
+From the [Visual Studio Marketplace](https://marketplace.visualstudio.com/):
+
+- Visual Studio Code (Stable and Insiders)
+- GitHub Codespaces
+- VS Code Remote (SSH, WSL, Dev Containers) and VS Code Server / Tunnels
+
+From [Open VSX](https://open-vsx.org/):
+
+- VSCodium
+- Cursor
+- Windsurf
+- Kiro
+- Google Antigravity
+- Firebase Studio
+- Void
+- Positron
+- code-server
+- Gitpod / Ona
+- Eclipse Theia and Theia IDE
+- Eclipse Che / Red Hat OpenShift Dev Spaces
+
+In the browser, on [vscode.dev](https://vscode.dev) and [github.dev](https://github.dev):
+everything works except the personal `~/.mlab/config.json` layer, since a
+browser has no home directory. Settings saved with the User scope go to the
+VS Code user settings there instead.
 
 ## License
 

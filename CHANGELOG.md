@@ -3,7 +3,14 @@
 All notable changes to this extension are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [1.0.2] - 2026-09-24
+## [1.1.0] - 2026-09-24
+
+### Added
+
+- **Runs in the browser** on vscode.dev and github.dev, through a second bundle
+  (`browser` entry). The only gap there is `~/.mlab/config.json`: a browser has no
+  home directory, so the User scope of the settings page writes to the VS Code
+  user settings instead.
 
 ### Changed
 
@@ -221,6 +228,6 @@ Initial release.
 - Settings: `mlab.apiUrl`, `mlab.severityFloor`, `mlab.timeoutMs`.
 - mlab-branded UI derived from the vuln.mlab.sh design system.
 
-[1.0.2]: https://github.com/mlab-sh/vuln-scan-vscode/releases/tag/v1.0.2
+[1.1.0]: https://github.com/mlab-sh/vuln-scan-vscode/releases/tag/v1.1.0
 [1.0.1]: https://github.com/mlab-sh/vuln-scan-vscode/releases/tag/v1.0.1
 [0.1.0]: https://github.com/mlab-sh/vuln-scan-vscode/releases/tag/v0.1.0

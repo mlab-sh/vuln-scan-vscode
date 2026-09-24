@@ -6,11 +6,13 @@ import {
   Store,
   expiredKeys,
   hashOf,
+  keyOf,
   worstOf,
   RETENTION_MS,
   DEFAULT_MAX_AGE_MS,
 } from '../src/cache'
 import { ScanOutcome } from '../src/api/client'
+import { sha256Hex as webSha256 } from '../src/platform.web'
 
 const DAY = 24 * 60 * 60 * 1000
 
@@ -151,13 +153,30 @@ test('forget and clearAll persist', async () => {
 
 // ── Supporting helpers ───────────────────────────────────────────────────────
 
-test('hashOf is stable and content sensitive', () => {
-  const a = hashOf(new TextEncoder().encode('name = "time"'))
-  const b = hashOf(new TextEncoder().encode('name = "time"'))
-  const c = hashOf(new TextEncoder().encode('name = "time" '))
+test('hashOf is stable and content sensitive', async () => {
+  const a = await hashOf(new TextEncoder().encode('name = "time"'))
+  const b = await hashOf(new TextEncoder().encode('name = "time"'))
+  const c = await hashOf(new TextEncoder().encode('name = "time" '))
   assert.equal(a, b)
   assert.notEqual(a, c)
   assert.match(a, /^[0-9a-f]{64}$/)
+})
+
+test('the web build hashes exactly like the Node build', async () => {
+  // Otherwise a cache filled on desktop would miss in the browser, and back.
+  const body = new TextEncoder().encode('name = "time"\nversion = "0.3.36"\n')
+  assert.equal(await webSha256(body), await hashOf(body))
+})
+
+test('keyOf keeps plain paths for local files and full URIs otherwise', () => {
+  const local = { scheme: 'file', fsPath: '/repo/Cargo.lock', toString: () => 'file:///repo/Cargo.lock' }
+  assert.equal(keyOf(local), '/repo/Cargo.lock')
+  const vfs = {
+    scheme: 'vscode-vfs',
+    fsPath: '/o/r/Cargo.lock',
+    toString: () => 'vscode-vfs://github/o/r/Cargo.lock',
+  }
+  assert.equal(keyOf(vfs), 'vscode-vfs://github/o/r/Cargo.lock')
 })
 
 test('worstOf reports the highest severity present', () => {
