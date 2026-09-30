@@ -18,6 +18,10 @@ export interface RenderOpts {
   fontsUri?: string
 }
 
+/** Attribution and warranty line shared by every panel that shows advisory data. */
+export const DATA_NOTICE = `<p class="muted">Data: OSV, GitHub Advisory Database (CC-BY 4.0), NVD, FIRST EPSS, CISA KEV. Informational only, no warranty.
+  <a href="https://github.com/mlab-sh/vuln-scan-vscode#data-sources--disclaimer">Sources &amp; disclaimer</a> · <a href="https://mlab.sh/legal/tos">Terms</a></p>`
+
 export function esc(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -202,7 +206,7 @@ export function reportHtml(
    ${stats}
    ${banners.join('')}
    ${table}
-   <footer class="muted small">Only this lockfile was sent to vuln.mlab.sh, never your source code. Nothing is uploaded without your agreement.</footer>`
+   <footer class="muted small">Only this lockfile was sent to vuln.mlab.sh, never your source code. Nothing is uploaded without your agreement.${DATA_NOTICE}</footer>`
   return shell(body, opts)
 }
 

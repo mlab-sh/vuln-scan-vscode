@@ -15,6 +15,9 @@ import { IntelCache } from './intelCache'
 import { fetchMany } from './api/intel'
 import { CveHover } from './views/cveHover'
 import { IndicatorPanel } from './views/indicatorPanel'
+import { FindingPanel } from './views/findingPanel'
+import { locateLine } from './diagnosticsCore'
+import { Finding } from './api/types'
 import { lookup, scanDomain, webUrlFor, IndicatorError } from './api/indicator'
 import { clean, detectKind, isSupported, costsQuota, isActive, kindLabel, MAX_LENGTH } from './ioc'
 import { AutoScanner } from './autoscan'
@@ -124,6 +127,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   register('mlab.openLockfile', (arg?: vscode.Uri | { resourceUri?: vscode.Uri }) => {
     const uri = arg instanceof vscode.Uri ? arg : arg?.resourceUri
     if (uri) vscode.commands.executeCommand('vscode.open', uri)
+  })
+  register('mlab.showFinding', (f: Finding, lockfile?: vscode.Uri) =>
+    FindingPanel.show(ctx.extensionUri, f, lockfile),
+  )
+  // Reached from the finding panel's command link, so arguments are plain JSON.
+  register('mlab.revealFinding', async (uri: string, name: string, version: string) => {
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri))
+    const hit = locateLine(doc.getText(), name, version)
+    const range = new vscode.Range(hit.line, hit.col, hit.line, hit.endCol)
+    await vscode.window.showTextDocument(doc, { selection: range, viewColumn: vscode.ViewColumn.Beside })
   })
   register('mlab.analyzeSelection', () => void analyzeSelection())
   register('mlab.openHome', () => HomePanel.show(ctx))

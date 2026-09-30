@@ -3,6 +3,18 @@
 All notable changes to this extension are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.1] - 2026-09-30
+
+### Added
+
+- **Finding detail page**: clicking a CVE in the sidebar opens it in the editor
+  with its summary, full description, CVSS, EPSS, known-exploited status,
+  weaknesses and aliases, links to every source (vuln.mlab.sh, NVD, OSV, GitHub
+  advisory, advisory references), and a button that jumps to the package in the
+  lockfile.
+- **Data sources & disclaimer** section in the README, and an attribution and
+  no-warranty line at the bottom of the report and the detail page.
+
 ## [1.1.0] - 2026-09-24
 
 ### Added

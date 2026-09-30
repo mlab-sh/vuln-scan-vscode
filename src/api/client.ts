@@ -200,6 +200,8 @@ export function buildOutcome(data: ScanResponse): ScanOutcome {
         if (SEV_RANK[severity] > SEV_RANK[existing.severity]) existing.severity = severity
         if (!existing.summary && v.summary) existing.summary = v.summary
         if (!existing.fixedVersion) existing.fixedVersion = fixedVersionOf(v)
+        if (!existing.details && v.details) existing.details = v.details
+        mergeSources(existing, v)
       } else {
         byCve.set(cve, {
           pkg,
@@ -210,7 +212,9 @@ export function buildOutcome(data: ScanResponse): ScanOutcome {
           summary: v.summary,
           fixedVersion: fixedVersionOf(v),
           url: cve.startsWith('CVE-') ? `https://vuln.mlab.sh/cve/${cve}` : undefined,
+          details: v.details,
         })
+        mergeSources(byCve.get(cve)!, v)
       }
     }
     findings.push(...byCve.values())
@@ -223,6 +227,16 @@ export function buildOutcome(data: ScanResponse): ScanOutcome {
     truncated: data.truncated,
     hash: data.hash,
   }
+}
+
+/** Fold an advisory's ids and reference links into a finding, without duplicates. */
+function mergeSources(f: Finding, v: OsvVuln): void {
+  const ids = new Set(f.aliases)
+  for (const id of [v.id, ...(v.aliases ?? [])]) if (id && id !== f.cve) ids.add(id)
+  f.aliases = [...ids]
+  const refs = new Set(f.references)
+  for (const r of v.references ?? []) if (r.url?.startsWith('https://') || r.url?.startsWith('http://')) refs.add(r.url)
+  f.references = [...refs]
 }
 
 /** Human summary line, e.g. `3 critical, 12 high across 6 packages`. */

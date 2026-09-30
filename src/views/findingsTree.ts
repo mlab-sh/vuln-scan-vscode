@@ -155,12 +155,10 @@ export class FindingsTree implements vscode.TreeDataProvider<Node> {
     )
     item.tooltip = md
     item.contextValue = f.url ? 'mlab.finding.linked' : 'mlab.finding'
-    if (f.url) {
-      item.command = {
-        command: 'vscode.open',
-        title: 'Open advisory',
-        arguments: [vscode.Uri.parse(f.url)],
-      }
+    item.command = {
+      command: 'mlab.showFinding',
+      title: 'Show details',
+      arguments: [f, this.records.get(node.key)?.uri],
     }
     return item
   }

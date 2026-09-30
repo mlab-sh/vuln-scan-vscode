@@ -138,6 +138,8 @@ previous results and offers to open the token page or add a token.
 - The extension declares support for
   [Workspace Trust](https://code.visualstudio.com/docs/editor/workspace-trust):
   in Restricted Mode, scanning is disabled with a clear message.
+- What happens to uploaded data is governed by the
+  [mlab privacy policy](https://mlab.sh/legal/privacy).
 
 ## Settings
 
@@ -221,6 +223,31 @@ In the browser, on [vscode.dev](https://vscode.dev) and [github.dev](https://git
 everything works except the personal `~/.mlab/config.json` layer, since a
 browser has no home directory. Settings saved with the User scope go to the
 VS Code user settings there instead.
+
+## Data sources & disclaimer
+
+Use of the extension and of the mlab API is subject to the
+[mlab terms of service](https://mlab.sh/legal/tos) and
+[privacy policy](https://mlab.sh/legal/privacy).
+
+Vulnerability data is aggregated by vuln.mlab.sh from third party sources and
+shown here as received:
+
+- [OSV](https://osv.dev) and the advisory databases it aggregates, including the
+  [GitHub Advisory Database](https://github.com/advisories)
+  ([CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/)) and
+  [RustSec](https://rustsec.org) (CC0)
+- [NVD](https://nvd.nist.gov): this product uses data from the NVD API but is
+  not endorsed or certified by the NVD
+- [CVE®](https://www.cve.org), a registered trademark of The MITRE Corporation,
+  used under the [CVE Program terms of use](https://www.cve.org/Legal/TermsOfUse)
+- [EPSS](https://www.first.org/epss) by FIRST
+- [CISA Known Exploited Vulnerabilities](https://www.cisa.gov/known-exploited-vulnerabilities-catalog)
+  and the [EU Vulnerability Database](https://euvd.enisa.europa.eu) (ENISA)
+
+All information is provided for informational purposes only, as is, without
+warranty of accuracy or completeness. A scan with no findings does not mean a
+project has no vulnerabilities.
 
 ## License
 

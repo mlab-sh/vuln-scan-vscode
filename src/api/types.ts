@@ -11,6 +11,7 @@ export interface OsvVuln {
   details?: string
   database_specific?: { severity?: string }
   severity?: Array<{ type?: string; score?: string }>
+  references?: Array<{ type?: string; url?: string }>
   affected?: Array<{
     ranges?: Array<{
       type?: string
@@ -73,4 +74,10 @@ export interface Finding {
   fixedVersion?: string
   /** Link to the CVE page, when `cve` is a real CVE id. */
   url?: string
+  /** Long description from the advisory. */
+  details?: string
+  /** Every advisory id merged into this finding (GHSA, RUSTSEC ...). */
+  aliases?: string[]
+  /** Source links from the advisories, deduplicated. */
+  references?: string[]
 }

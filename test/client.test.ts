@@ -205,6 +205,18 @@ test('collapsing backfills the fixed version from whichever advisory has it', ()
   assert.equal(out.findings[0].fixedVersion, '0.2.23')
 })
 
+test('collapsing merges advisory ids and http reference links, deduplicated', () => {
+  const withRefs: ScanResponse = structuredClone(duplicated)
+  withRefs.results[0].vulns![0].references = [
+    { url: 'https://github.com/time-rs/time/issues/293' },
+    { url: 'javascript:alert(1)' },
+  ]
+  withRefs.results[0].vulns![1].references = [{ url: 'https://github.com/time-rs/time/issues/293' }]
+  const f = buildOutcome(withRefs).findings[0]
+  assert.deepEqual(f.aliases, ['GHSA-wcg3-cvx6-7396', 'RUSTSEC-2020-0071'])
+  assert.deepEqual(f.references, ['https://github.com/time-rs/time/issues/293'])
+})
+
 test('findings link to their CVE page only for real CVE ids', () => {
   const out = buildOutcome(duplicated)
   assert.equal(out.findings[0].url, 'https://vuln.mlab.sh/cve/CVE-2020-26235')
