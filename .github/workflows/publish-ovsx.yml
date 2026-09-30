@@ -1,0 +1,36 @@
+name: Publish to Open VSX
+
+# Manual only: publishes whatever version package.json declares on the chosen ref.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: open-vsx
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
+      - name: Read version
+        id: version
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - run: npx --no-install @vscode/vsce package --no-dependencies -o vuln-scan-${{ steps.version.outputs.version }}.vsix
+      - name: Publish
+        run: npx --yes ovsx@1.2.0 publish vuln-scan-${{ steps.version.outputs.version }}.vsix
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vuln-scan-${{ steps.version.outputs.version }}.vsix
+          path: vuln-scan-${{ steps.version.outputs.version }}.vsix

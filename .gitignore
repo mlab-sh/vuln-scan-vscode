@@ -7,3 +7,5 @@ out/
 *.vsix
 .DS_Store
 .vscode-*
+
+.env
