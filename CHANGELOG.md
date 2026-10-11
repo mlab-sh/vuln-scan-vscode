@@ -3,6 +3,33 @@
 All notable changes to this extension are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.0] - 2026-10-11
+
+### Added
+
+- **`.mlab/vuln.yml`**, a per workspace override above every other settings
+  layer. `disable: true` turns mlab off in that workspace: no scans, hovers or
+  lookups, results hidden but kept. The GitHub Action reads the same file.
+- **Ignore list** (`ignoreVulns`): advisories accepted as known risk are hidden
+  from the sidebar, Problems, Explorer marks and report. Matched against every
+  alias, applied without a rescan.
+- **Skip gitignored lockfiles** (`mlab.ignoreGitIgnored`, on by default) in the
+  workspace sweep, automatic rescans and restored results. An explicit check
+  still scans the file.
+- **Status bar item** with the number of findings, colored by the worst
+  severity, opening the sidebar.
+- **Settings button** in the sidebar title bar, and a **Create .mlab/vuln.yml**
+  command that writes a commented template.
+
+### Changed
+
+- Config files are validated when read: unknown keys and bad values are named
+  in a warning and ignored instead of being applied silently.
+- The sidebar and the mlab page say so when mlab is disabled by `vuln.yml`, and
+  settings coming from `vuln.yml` are locked on the page.
+- Explorer marks now follow the sidebar, so anything it hides is not painted
+  red either.
+
 ## [1.1.1] - 2026-09-30
 
 ### Added

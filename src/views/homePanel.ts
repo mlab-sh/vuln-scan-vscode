@@ -211,6 +211,9 @@ export class HomePanel {
       case 'openTokens':
         vscode.env.openExternal(vscode.Uri.parse('https://vuln.mlab.sh/me/tokens'))
         break
+      case 'openOverride':
+        await config.openOverrideFile()
+        break
       case 'openSettings':
         vscode.commands.executeCommand('workbench.action.openSettings', 'mlab.')
         break
@@ -289,31 +292,35 @@ export class HomePanel {
   private settingRow(st: SettingState): string {
     const { desc, value, origin } = st
     const id = `set-${desc.key}`
+    // vuln.yml wins over everything the page can write, so editing here would
+    // look like it worked and change nothing. Lock the row and say why.
+    const locked = origin === 'override-file'
+    const dis = locked ? ' disabled title="Set in .mlab/vuln.yml"' : ''
     let control: string
     if (desc.kind === 'boolean') {
-      control = `<label class="switch"><input id="${id}" data-key="${desc.key}" data-kind="boolean" class="ctl" type="checkbox"${value ? ' checked' : ''} /><span>${value ? 'Enabled' : 'Disabled'}</span></label>`
+      control = `<label class="switch"><input id="${id}" data-key="${desc.key}"${dis} data-kind="boolean" class="ctl" type="checkbox"${value ? ' checked' : ''} /><span>${value ? 'Enabled' : 'Disabled'}</span></label>`
     } else if (desc.kind === 'enum') {
       const opts = (desc.options ?? [])
         .map((o) => `<option value="${esc(o)}"${o === value ? ' selected' : ''}>${esc(o)}</option>`)
         .join('')
-      control = `<select id="${id}" data-key="${desc.key}" class="ctl">${opts}</select>`
+      control = `<select id="${id}" data-key="${desc.key}"${dis} class="ctl">${opts}</select>`
     } else if (desc.kind === 'number') {
-      control = `<input id="${id}" data-key="${desc.key}" class="ctl" type="number" min="${desc.min ?? 0}" step="1000" value="${esc(String(value ?? ''))}" />`
+      control = `<input id="${id}" data-key="${desc.key}"${dis} class="ctl" type="number" min="${desc.min ?? 0}" step="1000" value="${esc(String(value ?? ''))}" />`
     } else {
-      control = `<input id="${id}" data-key="${desc.key}" class="ctl mono" type="text" spellcheck="false" value="${esc(String(value ?? ''))}" />`
+      control = `<input id="${id}" data-key="${desc.key}"${dis} class="ctl mono" type="text" spellcheck="false" value="${esc(String(value ?? ''))}" />`
     }
     const badge =
       origin === 'default'
         ? `<span class="origin def">default</span>`
         : `<span class="origin set">${esc(config.layerLabel(origin))}</span>`
     const reset =
-      origin === 'default'
+      origin === 'default' || locked
         ? ''
         : `<button class="btn ghost tiny reset" data-key="${desc.key}" type="button" title="Reset to default">Reset</button>`
     return `<div class="setting">
       <div class="setting-head"><label for="${id}">${esc(desc.label)}</label>${badge}</div>
       <div class="setting-ctl">${control}${reset}</div>
-      <p class="muted small">${esc(desc.hint)} <code>mlab.${esc(desc.key)}</code></p>
+      <p class="muted small">${esc(desc.hint)} ${locked ? 'Set in <code>.mlab/vuln.yml</code>, edit it there.' : `<code>mlab.${esc(desc.key)}</code>`}</p>
     </div>`
   }
 
@@ -353,6 +360,12 @@ export class HomePanel {
       <p class="muted">On demand CVE scanning for your lockfiles. Nothing leaves your machine until you ask.</p>
     </div>
   </header>
+
+  ${
+    config.isDisabled()
+      ? `<div class="banner warn"><strong>mlab is disabled for this workspace</strong> by <code>disable: true</code> in <code>.mlab/vuln.yml</code>. No scans, hovers or lookups run here. Previous results come back when the line is removed. <a class="open-yml" href="#">Open vuln.yml</a></div>`
+      : ''
+  }
 
   ${status}
 
@@ -423,6 +436,12 @@ export class HomePanel {
       </div>
     </div>
     ${settings.map((st) => this.settingRow(st)).join('')}
+    <div class="setting">
+      <div class="setting-head"><label>Workspace override</label></div>
+      <p class="muted small"><code>.mlab/vuln.yml</code> overrides every setting above for this workspace, can turn mlab off with <code>disable: true</code>, and lists advisories accepted as known risk (<code>ignoreVulns</code>${
+        config.get('ignoreVulns').length ? `, ${config.get('ignoreVulns').length} ignored now` : ''
+      }).${this.hasWorkspace ? ' <a class="open-yml" href="#">Open or create it</a>' : ''}</p>
+    </div>
     <div class="actions">
       <button id="settings" class="btn ghost" type="button">Open in native settings editor</button>
     </div>
@@ -444,6 +463,7 @@ export class HomePanel {
   });
   document.getElementById('clear')?.addEventListener('click', () => post('clear'));
   document.getElementById('settings').addEventListener('click', () => post('openSettings'));
+  document.querySelectorAll('.open-yml').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); post('openOverride'); }));
   document.getElementById('check').addEventListener('click', () => post('checkLockfile'));
   document.getElementById('workspace').addEventListener('click', () => post('scanWorkspace'));
   document.getElementById('tokens-link').addEventListener('click', (e) => { e.preventDefault(); post('openTokens'); });

@@ -2,7 +2,7 @@
   "name": "vuln-scan",
   "displayName": "mlab security",
   "description": "CVE scanning for your lockfiles, powered by mlab. Nothing is uploaded until you agree once; after that, changed lockfiles are rescanned automatically and results are cached per content.",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "publisher": "mlab-sh",
   "license": "MIT",
   "repository": {
@@ -98,6 +98,11 @@
         "title": "Open settings",
         "category": "mlab",
         "icon": "$(gear)"
+      },
+      {
+        "command": "mlab.createOverrideFile",
+        "title": "Create .mlab/vuln.yml for this workspace",
+        "category": "mlab"
       },
       {
         "command": "mlab.openLockfile",
@@ -207,7 +212,13 @@
     "viewsWelcome": [
       {
         "view": "mlab.findings",
-        "contents": "No scan has been run yet.\n\nNothing is sent to vuln.mlab.sh until you agree once. After that, lockfiles are rescanned automatically when their contents change, and unchanged files are served from cache.\n\nRight-click a lockfile in the Explorer, or start from here.\n[Check for lock vulnerabilities](command:mlab.checkLockfile)\n[Scan all lockfiles in workspace](command:mlab.scanWorkspace)\n\nQuota, API token and settings live on the mlab page.\n[Open mlab](command:mlab.openHome)\n\nSupported lockfiles: Cargo.lock, package-lock.json, npm-shrinkwrap.json, composer.lock, Gemfile.lock, go.sum, requirements.txt, mise.lock."
+        "contents": "No scan has been run yet.\n\nNothing is sent to vuln.mlab.sh until you agree once. After that, lockfiles are rescanned automatically when their contents change, and unchanged files are served from cache.\n\nRight-click a lockfile in the Explorer, or start from here.\n[Check for lock vulnerabilities](command:mlab.checkLockfile)\n[Scan all lockfiles in workspace](command:mlab.scanWorkspace)\n\nQuota, API token and settings live on the mlab page.\n[Open mlab](command:mlab.openHome)\n\nSupported lockfiles: Cargo.lock, package-lock.json, npm-shrinkwrap.json, composer.lock, Gemfile.lock, go.sum, requirements.txt, mise.lock.",
+        "when": "!mlab.disabled"
+      },
+      {
+        "view": "mlab.findings",
+        "when": "mlab.disabled",
+        "contents": "mlab is disabled for this workspace by `disable: true` in .mlab/vuln.yml.\n\nPrevious results are kept and come back as soon as the line is removed.\n[Open .mlab/vuln.yml](command:mlab.createOverrideFile)"
       }
     ],
     "configuration": {
@@ -222,6 +233,14 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Skip lockfiles that git ignores (any `.gitignore`, `.git/info/exclude` or global excludes) in **Scan all lockfiles in workspace** and automatic rescans. Checking a file explicitly still scans it. Needs the built in Git extension, so it has no effect on vscode.dev."
+        },
+        "mlab.ignoreVulns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Advisory ids (`CVE-...`, `GHSA-...`, `RUSTSEC-...`) accepted as a known risk. Matching findings are hidden everywhere: sidebar, Problems, Explorer marks and report. Matched against the advisory id and all of its aliases. Best kept in `.mlab/vuln.yml` with a comment saying why."
         },
         "mlab.cveHover": {
           "type": "boolean",

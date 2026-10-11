@@ -154,14 +154,32 @@ Settings resolve through five layers, highest priority first:
    keeps working
 4. built in defaults
 
-To turn the extension off in one workspace, put this in `.mlab/vuln.yml`:
+### `.mlab/vuln.yml`
+
+Run **mlab: Create .mlab/vuln.yml for this workspace** to get a commented
+template. The same file is read by the
+[GitHub Action](https://github.com/mlab-sh/vuln-scan-action), so one file drives
+the editor and CI.
 
 ```yaml
-disable: true
+# Turn mlab off in this workspace: no scans, no hovers, no lookups. Previous
+# results are hidden, not deleted, and come back when the line is removed.
+# disable: true
+
+# Advisories accepted as known risk, hidden everywhere (and never failing CI).
+ignoreVulns:
+  - CVE-2024-0000   # not reachable: only used in tests
+
+autoScan: false
 ```
 
-No scans, no hovers, no lookups, and previous results are hidden (not deleted:
-remove the line and they come back).
+Ignored advisories are matched against the advisory id and all of its aliases,
+and are filtered when results are shown, not when they are cached: editing the
+list applies at once, without a rescan.
+
+Every config file is checked when it is read. An unknown key (`autoscan`) or a
+bad value (`severityFloor: hgih`) is reported in a warning and ignored rather
+than applied silently. Settings set in `vuln.yml` are locked on the mlab page.
 
 The mlab page shows which layer each value came from and lets you edit it, and
 the native settings editor stays one click away.
@@ -170,6 +188,7 @@ the native settings editor stays one click away.
 | --- | --- | --- |
 | `mlab.autoScan` | `true` | Rescan a lockfile when its contents change. Never uploads anything before you have consented once. |
 | `mlab.ignoreGitIgnored` | `true` | Skip lockfiles that git ignores in the workspace sweep and automatic rescans. An explicit check still scans the file. |
+| `mlab.ignoreVulns` | `[]` | Advisory ids (`CVE-...`, `GHSA-...`) accepted as known risk and hidden everywhere. Best kept in `.mlab/vuln.yml` with a comment saying why. |
 | `mlab.analyzeSelection` | `true` | Offer **Analyze selection** in the editor context menu. |
 | `mlab.platformUrl` | `https://mlab.sh/api/v1` | Platform API base, for indicator lookups. |
 | `mlab.cveHover` | `true` | Show CVSS, EPSS and known-exploited status when you hover a CVE identifier. Only the identifier is looked up. |

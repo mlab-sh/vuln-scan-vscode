@@ -1,15 +1,15 @@
 import * as vscode from 'vscode'
-import { ScanCache, keyOf } from '../cache'
-import * as config from '../config'
+import { worstOf } from '../cache'
+import { FindingsTree } from './findingsTree'
 
 // Colors a lockfile in the Explorer by the worst severity its last scan found:
 // red for high/critical, orange for medium, blue for low/unknown.
 //
-// The decoration is driven purely by the cache, and the cache is keyed by file
-// content, so the file stays red for exactly as long as the vulnerable content
-// is still on disk. Editing the lockfile invalidates the entry, the next scan
-// repopulates it, and a clean result drops the decoration. That is the
-// "stays red until it is patched" behaviour, without any polling.
+// The decoration mirrors the sidebar tree, which is rebuilt from the content
+// keyed cache, so the file stays red for exactly as long as the vulnerable
+// content is still on disk. Reading the tree rather than the cache means
+// whatever the tree hides (ignored advisories, gitignored files, a disabled
+// workspace) is not painted red either.
 
 const BADGE: Record<string, string> = {
   critical: 'C',
@@ -23,7 +23,7 @@ export class LockfileDecorations implements vscode.FileDecorationProvider {
   private readonly changed = new vscode.EventEmitter<vscode.Uri | vscode.Uri[] | undefined>()
   readonly onDidChangeFileDecorations = this.changed.event
 
-  constructor(private readonly cache: ScanCache) {}
+  constructor(private readonly tree: FindingsTree) {}
 
   /** Repaint one file, or everything when no uri is given. */
   refresh(uri?: vscode.Uri): void {
@@ -31,12 +31,11 @@ export class LockfileDecorations implements vscode.FileDecorationProvider {
   }
 
   provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
-    if (config.isDisabled()) return undefined
-    const entry = this.cache.peek(keyOf(uri))
-    if (!entry || entry.findingCount === 0) return undefined
+    const outcome = this.tree.get(uri)?.outcome
+    if (!outcome || outcome.findings.length === 0) return undefined
 
-    const n = entry.findingCount
-    const sev = entry.worstSeverity
+    const n = outcome.findings.length
+    const sev = worstOf(outcome)
     return {
       badge: BADGE[sev] ?? '!',
       tooltip: `mlab: ${n} known vulnerabilit${n === 1 ? 'y' : 'ies'}, worst is ${sev}`,

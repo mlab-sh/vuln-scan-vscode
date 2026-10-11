@@ -50,6 +50,17 @@ export class FindingsTree implements vscode.TreeDataProvider<Node> {
     this.changed.fire(undefined)
   }
 
+  /** Swap the whole content in one go, so a rebuild never flashes empty. */
+  replaceAll(entries: Array<Omit<ScanRecord, 'at'>>): void {
+    this.records.clear()
+    for (const e of entries) this.records.set(e.uri.toString(), { ...e, at: Date.now() })
+    this.changed.fire(undefined)
+  }
+
+  get(uri: vscode.Uri): ScanRecord | undefined {
+    return this.records.get(uri.toString())
+  }
+
   get isEmpty(): boolean {
     return this.records.size === 0
   }

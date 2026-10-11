@@ -1,6 +1,7 @@
 import * as vscode from 'vscode'
 import { homeDir } from './platform'
-import { parseFlatYaml } from './flatYaml'
+import { DEFAULTS, MlabConfig, dropIgnored, parseFlatYaml, validateConfig } from './configCore'
+import type { ScanOutcome } from './api/client'
 
 // Layered configuration for mlab.
 //
@@ -25,29 +26,8 @@ export const CONFIG_DIRNAME = '.mlab'
 export const CONFIG_FILENAME = 'config.json'
 export const OVERRIDE_FILENAME = 'vuln.yml'
 
-export interface MlabConfig {
-  apiUrl: string
-  /** Base of the mlab platform API, used for indicator lookups. */
-  platformUrl: string
-  severityFloor: 'any' | 'low' | 'medium' | 'high' | 'critical'
-  timeoutMs: number
-  autoScan: boolean
-  /** Skip lockfiles that git ignores, in the workspace sweep and auto scans. */
-  ignoreGitIgnored: boolean
-  cveHover: boolean
-  analyzeSelection: boolean
-}
-
-export const DEFAULTS: MlabConfig = {
-  apiUrl: 'https://vuln.mlab.sh/api/v2/scan',
-  platformUrl: 'https://mlab.sh/api/v1',
-  severityFloor: 'any',
-  timeoutMs: 30000,
-  autoScan: true,
-  ignoreGitIgnored: true,
-  cveHover: true,
-  analyzeSelection: true,
-}
+export type { MlabConfig } from './configCore'
+export { DEFAULTS } from './configCore'
 
 /** Which layer a value came from, so the UI can say so out loud. */
 export type Layer = 'override-file' | 'workspace-file' | 'user-file' | 'vscode' | 'default'
@@ -79,7 +59,15 @@ function uriFor(scope: Scope): vscode.Uri | undefined {
 // snapshot, filled by `load()` at activation and refreshed by `watch()` and by
 // every write.
 let files: Record<Scope, Partial<MlabConfig>> = { workspace: {}, user: {} }
-let override: Partial<MlabConfig> & { disable?: unknown } = {}
+let override: Partial<MlabConfig> & { disable?: boolean } = {}
+
+/** Show a file's validation problems once per load, not on every read. */
+function report(uri: vscode.Uri, problems: string[]): void {
+  if (problems.length === 0) return
+  vscode.window.showWarningMessage(
+    `mlab: ignored in ${vscode.workspace.asRelativePath(uri)}: ${problems.join('; ')}`,
+  )
+}
 
 function overrideUri(): vscode.Uri | undefined {
   const folder = vscode.workspace.workspaceFolders?.[0]
@@ -89,11 +77,51 @@ function overrideUri(): vscode.Uri | undefined {
 async function readOverride(): Promise<typeof override> {
   const uri = overrideUri()
   if (!uri) return {}
+  let text: string
   try {
-    return parseFlatYaml(new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)))
+    text = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri))
   } catch {
     return {} // absent
   }
+  const { values, problems } = validateConfig(parseFlatYaml(text), true)
+  report(uri, problems)
+  return values
+}
+
+const OVERRIDE_TEMPLATE = `# mlab settings for this workspace. Overrides every other layer.
+# Uncomment what you need. Read by the VS Code extension and the GitHub Action.
+
+# Turn mlab off entirely in this workspace (no scans, no hovers, no lookups).
+# disable: true
+
+# Advisories accepted as known risk, hidden everywhere. Say why next to each.
+# ignoreVulns:
+#   - CVE-2024-0000   # not reachable: only used in tests
+
+# autoScan: true            # rescan a lockfile when it changes
+# ignoreGitIgnored: true    # skip lockfiles git ignores
+# severityFloor: any        # any | low | medium | high | critical
+# cveHover: true
+# analyzeSelection: true
+# timeoutMs: 30000
+# apiUrl: https://vuln.mlab.sh/api/v2/scan
+# platformUrl: https://mlab.sh/api/v1
+`
+
+/** Open `.mlab/vuln.yml`, creating it from a commented template if missing. */
+export async function openOverrideFile(): Promise<void> {
+  const uri = overrideUri()
+  if (!uri) {
+    vscode.window.showWarningMessage('mlab: open a folder first, .mlab/vuln.yml lives in the workspace.')
+    return
+  }
+  try {
+    await vscode.workspace.fs.stat(uri)
+  } catch {
+    await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(uri, '..'))
+    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(OVERRIDE_TEMPLATE))
+  }
+  await vscode.window.showTextDocument(uri)
 }
 
 /** True when `.mlab/vuln.yml` says `disable: true`. */
@@ -101,8 +129,11 @@ export function isDisabled(): boolean {
   return override.disable === true
 }
 
-/** Parse a config file, tolerating absence. Malformed JSON is surfaced once. */
-async function readFile(uri: vscode.Uri | undefined): Promise<Partial<MlabConfig>> {
+/**
+ * Parse a config file, tolerating absence. Malformed JSON is surfaced once.
+ * `raw` skips validation, for writes that must keep keys they do not own.
+ */
+async function readFile(uri: vscode.Uri | undefined, raw = false): Promise<Record<string, unknown>> {
   if (!uri) return {}
   let text: string
   try {
@@ -112,7 +143,11 @@ async function readFile(uri: vscode.Uri | undefined): Promise<Partial<MlabConfig
   }
   try {
     const parsed = JSON.parse(text)
-    return parsed && typeof parsed === 'object' ? (parsed as Partial<MlabConfig>) : {}
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    if (raw) return parsed
+    const { values, problems } = validateConfig(parsed, false)
+    report(uri, problems)
+    return values
   } catch (err) {
     vscode.window.showWarningMessage(
       `mlab: ${uri.fsPath} is not valid JSON and was ignored. ${err instanceof Error ? err.message : ''}`,
@@ -147,6 +182,11 @@ export function resolve<K extends keyof MlabConfig>(key: K): Resolved<K> {
   if (fromVscode !== undefined) return { value: fromVscode as MlabConfig[K], layer: 'vscode' }
 
   return { value: DEFAULTS[key], layer: 'default' }
+}
+
+/** `outcome` as it should be shown: minus the advisories in `ignoreVulns`. */
+export function visible(outcome: ScanOutcome): ScanOutcome {
+  return dropIgnored(outcome, get('ignoreVulns'))
 }
 
 /** Convenience for call sites that only need the value. */
@@ -185,9 +225,9 @@ export async function write<K extends keyof MlabConfig>(
       .update(key, value, vscode.ConfigurationTarget.Global)
     return
   }
-  const next = { ...(await readFile(uri)), [key]: value }
+  const next = { ...(await readFile(uri, true)), [key]: value }
   await writeJson(uri, next)
-  files[scope] = next
+  files[scope] = validateConfig(next, false).values
 }
 
 /**
@@ -199,13 +239,13 @@ export async function reset<K extends keyof MlabConfig>(key: K): Promise<void> {
   for (const scope of ['workspace', 'user'] as Scope[]) {
     const uri = uriFor(scope)
     if (!uri) continue
-    const current = await readFile(uri)
+    const current = await readFile(uri, true)
     if (current[key] === undefined) continue
     delete current[key]
     try {
       if (Object.keys(current).length === 0) await vscode.workspace.fs.delete(uri)
       else await writeJson(uri, current)
-      files[scope] = current
+      files[scope] = validateConfig(current, false).values
     } catch {
       // Nothing to do: the file is already gone or not writable.
     }

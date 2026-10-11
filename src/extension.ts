@@ -10,7 +10,7 @@ import { ReportPanel } from './views/reportPanel'
 import { HomePanel, onSettingsWritten } from './views/homePanel'
 import { FindingsTree } from './views/findingsTree'
 import { LockfileDecorations } from './views/decorations'
-import { ScanCache, hashOf, keyOf } from './cache'
+import { ScanCache, hashOf, keyOf, worstOf } from './cache'
 import { IntelCache } from './intelCache'
 import { fetchMany } from './api/intel'
 import { CveHover } from './views/cveHover'
@@ -44,6 +44,7 @@ let output: vscode.OutputChannel
 let ctx: vscode.ExtensionContext
 let tree: FindingsTree
 let view: vscode.TreeView<unknown>
+let statusItem: vscode.StatusBarItem
 let cache: ScanCache
 let decorations: LockfileDecorations
 let autoScanner: AutoScanner
@@ -60,6 +61,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   tree = new FindingsTree()
   view = vscode.window.createTreeView('mlab.findings', { treeDataProvider: tree })
+  statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10)
+  statusItem.command = 'mlab.findings.focus'
+  context.subscriptions.push(statusItem)
   context.subscriptions.push(view)
 
   diagnostics = new LockfileDiagnostics()
@@ -77,13 +81,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void cache.prune().then((n) => {
     if (n > 0) output.appendLine(`[cache] pruned ${n} entr${n === 1 ? 'y' : 'ies'} past retention`)
   })
-  decorations = new LockfileDecorations(cache)
+  decorations = new LockfileDecorations(tree)
   context.subscriptions.push(vscode.window.registerFileDecorationProvider(decorations))
-
-  // Restore the previous results from the cache straight away, with no network
-  // call, so a lockfile that was vulnerable when the window closed comes back
-  // red and listed rather than looking clean until the next scan.
-  void rehydrate()
 
   autoScanner = new AutoScanner(async (uri) => {
     if (config.get('ignoreGitIgnored') === true && (await dropGitIgnored([uri])).length === 0) {
@@ -96,22 +95,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   autoScanner.sync()
   // `.mlab` files live outside the VS Code config system, so the page tells us
   // directly when one is written.
-  let wasDisabled = config.isDisabled()
   const onSettingsChanged = () => {
-    // `disable: true` in .mlab/vuln.yml hides every result without dropping the
-    // cache, so removing the line brings them straight back.
-    const disabled = config.isDisabled()
-    if (disabled !== wasDisabled) {
-      wasDisabled = disabled
-      if (disabled) {
-        tree.clear()
-        diagnostics.clear()
-        syncView()
-        decorations.refresh()
-      } else {
-        void rehydrate()
-      }
-    }
     // The menu entry is gated on a context key, which has to be kept in step
     // with the setting by hand: `when` clauses cannot read configuration.
     void vscode.commands.executeCommand(
@@ -119,11 +103,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       'mlab.analyzeSelection',
       config.get('analyzeSelection') === true && !config.isDisabled(),
     )
+    void vscode.commands.executeCommand('setContext', 'mlab.disabled', config.isDisabled())
     autoScanner.sync()
-    void refreshDiagnostics()
+    // Every result surface is rebuilt from the cache, so `disable`, the ignore
+    // list, the gitignore filter and the severity floor all apply at once, and
+    // undoing any of them brings results back without a rescan.
+    void rehydrate()
     void HomePanel.refresh()
   }
   onSettingsWritten(onSettingsChanged)
+  // Also restores the previous results from the cache straight away, with no
+  // network call, so a lockfile that was vulnerable when the window closed
+  // comes back red and listed rather than looking clean until the next scan.
   onSettingsChanged()
   // `.mlab` files are edited by hand too, and no configuration event fires then.
   context.subscriptions.push(config.watch(onSettingsChanged))
@@ -162,6 +153,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   })
   register('mlab.analyzeSelection', () => void analyzeSelection())
   register('mlab.openHome', () => HomePanel.show(ctx))
+  register('mlab.createOverrideFile', () => config.openOverrideFile())
   register('mlab.openSettings', () =>
     vscode.commands.executeCommand('workbench.action.openSettings', 'mlab.'),
   )
@@ -180,31 +172,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
  * would list project A's findings. Entries whose lockfile is gone from an open
  * folder are pruned, so a deleted lockfile does not linger forever.
  */
-async function rehydrate(): Promise<void> {
-  if (config.isDisabled()) return
-  let restored = 0
-  for (const key of cache.paths()) {
-    const uri = uriOf(key)
-    if (!vscode.workspace.getWorkspaceFolder(uri)) continue
-
-    try {
-      await vscode.workspace.fs.stat(uri)
-    } catch {
-      await cache.forget(key)
-      continue
+async function rehydrate(): Promise<number> {
+  const live: vscode.Uri[] = []
+  if (!config.isDisabled()) {
+    for (const key of cache.paths()) {
+      const uri = uriOf(key)
+      if (!vscode.workspace.getWorkspaceFolder(uri)) continue
+      try {
+        await vscode.workspace.fs.stat(uri)
+      } catch {
+        await cache.forget(key)
+        continue
+      }
+      live.push(uri)
     }
-    const entry = cache.peek(key)
-    if (!entry) continue
-    tree.record(uri, entry.filename, entry.outcome)
-    await setDiagnosticsFor(uri, entry.outcome)
-    restored++
   }
+  const kept = config.get('ignoreGitIgnored') === true ? await dropGitIgnored(live) : live
 
+  const entries = []
+  for (const uri of kept) {
+    const entry = cache.peek(keyOf(uri))
+    if (entry) entries.push({ uri, filename: entry.filename, outcome: config.visible(entry.outcome) })
+  }
+  tree.replaceAll(entries)
+  diagnostics.clear()
+  for (const e of entries) await setDiagnosticsFor(e.uri, e.outcome)
   syncView()
   decorations.refresh()
-  if (restored > 0) {
-    output.appendLine(`[cache] restored ${restored} previous result(s) without scanning`)
-  }
+  return entries.length
 }
 
 /** Inverse of keyOf: a plain path is a local file, anything else a full URI. */
@@ -226,20 +221,32 @@ async function setDiagnosticsFor(uri: vscode.Uri, outcome: ScanOutcome): Promise
   }
 }
 
-/** Re-publish every diagnostic, e.g. after `severityFloor` changed. */
-async function refreshDiagnostics(): Promise<void> {
-  if (config.isDisabled()) return
-  for (const key of cache.paths()) {
-    const entry = cache.peek(key)
-    if (entry) await setDiagnosticsFor(uriOf(key), entry.outcome)
-  }
-}
-
 /** Keep the view badge and title in step with what the tree holds. */
 function syncView(): void {
   const n = tree.totalFindings
   view.badge = n > 0 ? { value: n, tooltip: `${n} finding${n === 1 ? '' : 's'}` } : undefined
   vscode.commands.executeCommand('setContext', 'mlab.hasResults', !tree.isEmpty)
+
+  // Status bar: only once something was scanned, so an untouched workspace
+  // stays quiet. Colored like the Explorer marks.
+  if (tree.isEmpty) {
+    statusItem.hide()
+    return
+  }
+  const findings = tree.scannedUris().flatMap((u) => tree.get(u)?.outcome.findings ?? [])
+  const worst = worstOf({ findings } as ScanOutcome)
+  statusItem.text = `$(shield) ${n}`
+  statusItem.tooltip =
+    n > 0
+      ? `mlab: ${n} known vulnerabilit${n === 1 ? 'y' : 'ies'}, worst is ${worst}. Click to see them.`
+      : 'mlab: no known vulnerabilities in the scanned lockfiles.'
+  statusItem.backgroundColor =
+    worst === 'critical' || worst === 'high'
+      ? new vscode.ThemeColor('statusBarItem.errorBackground')
+      : worst === 'medium'
+        ? new vscode.ThemeColor('statusBarItem.warningBackground')
+        : undefined
+  statusItem.show()
 }
 
 export function deactivate(): void {
@@ -290,9 +297,10 @@ async function performScan(uri: vscode.Uri, opts: ScanOpts): Promise<ScanResult>
 
   const hit = cache.lookup(keyOf(uri), hash)
   if (hit) {
-    publish(uri, filename, text, hit.outcome)
-    output.appendLine(`[cache] ${filename}: ${summarize(hit.outcome)} (unchanged since last scan)`)
-    return { kind: 'cached', outcome: hit.outcome }
+    const shown = config.visible(hit.outcome)
+    publish(uri, filename, text, shown)
+    output.appendLine(`[cache] ${filename}: ${summarize(shown)} (unchanged since last scan)`)
+    return { kind: 'cached', outcome: shown }
   }
 
   // Only now does anything leave the machine, so this is where consent belongs.
@@ -335,10 +343,11 @@ async function performScan(uri: vscode.Uri, opts: ScanOpts): Promise<ScanResult>
 
     await enrich(outcome, controller.signal)
     await cache.put(keyOf(uri), filename, hash, outcome)
-    publish(uri, filename, text, outcome)
-    panel?.report(filename, outcome, undefined, panelToken)
-    output.appendLine(`[${label}] ${filename}: ${summarize(outcome)}`)
-    return { kind: 'scanned', outcome }
+    const shown = config.visible(outcome)
+    publish(uri, filename, text, shown)
+    panel?.report(filename, shown, undefined, panelToken)
+    output.appendLine(`[${label}] ${filename}: ${summarize(shown)}`)
+    return { kind: 'scanned', outcome: shown }
   } catch (err) {
     handleScanError(err, filename, panel, quiet, panelToken)
     return { kind: 'failed', error: err }
@@ -579,7 +588,7 @@ async function showReport(resource?: vscode.Uri): Promise<void> {
     return
   }
 
-  ReportPanel.show(ctx.extensionUri).report(entry.filename, entry.outcome, entry.at)
+  ReportPanel.show(ctx.extensionUri).report(entry.filename, config.visible(entry.outcome), entry.at)
   output.appendLine(`[report] ${entry.filename}: shown from cache, scanned ${new Date(entry.at).toISOString()}`)
 }
 
