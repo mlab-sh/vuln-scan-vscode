@@ -100,8 +100,12 @@ with a **Cancel** button, then the final report.
 
 ## Supported lockfiles
 
-`Cargo.lock`, `package-lock.json`, `npm-shrinkwrap.json`, `composer.lock`,
-`Gemfile.lock`, `go.sum`, `requirements.txt`, `mise.lock`.
+`Cargo.lock`, `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`,
+`pnpm-lock.yaml`, `composer.lock`, `Gemfile.lock`, `go.sum`, `requirements.txt`,
+`poetry.lock`, `uv.lock`, `pdm.lock`, `Pipfile.lock`, `pom.xml`,
+`gradle.lockfile`, `packages.lock.json`, `pubspec.lock`, `mix.lock`, `mise.lock`,
+and CycloneDX SBOMs named `bom.json` or `bom.xml` (an SBOM component without a
+purl is matched by its CPE).
 
 Adding a format is a one line edit: append it to `LOCKFILES` in
 [`src/detect.ts`](src/detect.ts), then run `npm run sync:manifest`. The menu
@@ -109,16 +113,22 @@ clauses, the activation event, the globs and the welcome text all derive from
 that array, and CI fails if they drift.
 
 `Scan all lockfiles in workspace` walks the workspace with `workspace.findFiles`
-and skips `node_modules`, `vendor`, `target`, `dist`, and `.git`. It is quota
-aware: lockfiles already in the cache cost nothing, and before spending anything
-it tells you how many files actually need a fresh scan and asks. The run shows
-progress, can be cancelled, and stops early if the hourly quota runs out rather
-than burning the remaining files on the same error.
+and skips `node_modules`, `vendor`, `target`, `dist`, and `.git`. Lockfiles
+already in the cache cost nothing, and before uploading anything it tells you how
+many files actually need a fresh scan and asks. Files are scanned one at a time,
+waiting out the server's cooldown between them. The run shows progress, can be
+cancelled, and stops early if the server keeps refusing scans rather than
+burning the remaining files on the same error.
 
 ## API token and quotas
 
-Anonymous scans are limited to **8 per hour per IP**. A personal API token raises
-this to **25 per hour**.
+| | Packages per scan | Request size | Cooldown between scans |
+| --- | --- | --- | --- |
+| Anonymous (per IP) | 512 | 4 MiB | 10 s |
+| Free account, with a token | 1024 | 8 MiB | 5 s |
+| Paid plan, with a token | 4096 | 32 MiB | none |
+
+A token also attaches the scans to your history on vuln.mlab.sh.
 
 1. Generate a token at [vuln.mlab.sh/me/tokens](https://vuln.mlab.sh/me/tokens).
 2. Run `mlab: Manage API token & quota` (or `mlab: Set API token`) and paste it.
@@ -126,8 +136,10 @@ this to **25 per hour**.
 The token is stored **only** in VS Code
 [SecretStorage](https://code.visualstudio.com/api/references/vscode-api#SecretStorage).
 It is never written to your settings, to the workspace, or to disk in plaintext.
-When an anonymous scan is rate limited (HTTP 429), the extension keeps your
-previous results and offers to open the token page or add a token.
+Background and batch scans wait out the cooldown (HTTP 429) and retry once. An
+explicit scan shows the server's message (how long to wait, what the next tier
+unlocks) and keeps your previous results. A file over the size limit (HTTP 413)
+is reported the same way.
 
 ## Privacy
 
@@ -198,8 +210,12 @@ the native settings editor stays one click away.
 
 ## Notes and limits
 
-- Manifests over **512 packages** are scanned up to that ceiling; the report
-  shows a visible warning.
+- A manifest with more packages than your tier scans is cut at that limit; the
+  report says how many were left out, that they are **not** counted as clean,
+  and what the next tier allows.
+- Entries the server cannot turn into a package coordinate (a git or path
+  dependency, an unpinned requirement, an SBOM component with neither purl nor
+  CPE) are listed as not scanned.
 - Coordinates the scanner could not resolve (an upstream outage) are surfaced and
   are **not** counted as clean.
 - Timeouts, unreachable DNS, and non-JSON responses produce a readable

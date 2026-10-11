@@ -331,7 +331,7 @@ async function performScan(uri: vscode.Uri, opts: ScanOpts): Promise<ScanResult>
     const apiUrl = config.get('apiUrl')
     output.appendLine(`[${label}] ${filename} → ${apiUrl}${token ? ' (token)' : ' (anonymous)'}`)
 
-    const outcome = await scanLockfile({
+    const request = {
       apiUrl,
       filename,
       format: detectFormat(uri.fsPath),
@@ -339,7 +339,20 @@ async function performScan(uri: vscode.Uri, opts: ScanOpts): Promise<ScanResult>
       token: token || undefined,
       timeoutMs: config.get('timeoutMs'),
       signal: controller.signal,
-    })
+    }
+    let outcome: ScanOutcome
+    try {
+      outcome = await scanLockfile(request)
+    } catch (err) {
+      // The server spaces scans by a cooldown of a few seconds. A background or
+      // batch scan waits it out once rather than failing; an explicit scan
+      // reports it, with the server's own message.
+      const wait = cooldownSecs(err)
+      if (!quiet || wait === undefined) throw err
+      output.appendLine(`[${label}] ${filename}: cooldown, retrying in ${wait}s`)
+      if (!(await sleep(wait * 1000, controller.signal))) throw err
+      outcome = await scanLockfile(request)
+    }
 
     await enrich(outcome, controller.signal)
     await cache.put(keyOf(uri), filename, hash, outcome)
@@ -352,6 +365,21 @@ async function performScan(uri: vscode.Uri, opts: ScanOpts): Promise<ScanResult>
     handleScanError(err, filename, panel, quiet, panelToken)
     return { kind: 'failed', error: err }
   }
+}
+
+/** Seconds to wait before retrying, when `err` is a cooldown (429): at most a minute. */
+function cooldownSecs(err: unknown): number | undefined {
+  if (!(err instanceof ScanError) || err.kind !== 'rate-limit') return undefined
+  return Math.min(Math.max(Number(err.retryAfter) || 10, 1), 60)
+}
+
+/** Resolves true after `ms`, or false as soon as `signal` aborts. */
+function sleep(ms: number, signal?: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve(false)
+    const timer = setTimeout(() => resolve(true), ms)
+    signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(false) }, { once: true })
+  })
 }
 
 /**
@@ -592,16 +620,31 @@ async function showReport(resource?: vscode.Uri): Promise<void> {
   output.appendLine(`[report] ${entry.filename}: shown from cache, scanned ${new Date(entry.at).toISOString()}`)
 }
 
-// Rescans every lockfile currently in the tree, one at a time. Each one spends a
-// scan from the hourly quota, which is why this is only ever reachable from an
-// explicit click on the Rescan button.
+// Rescans every lockfile currently in the tree, one at a time, as a batch: the
+// server's cooldown between scans is waited out instead of reported per file.
+// Only ever reachable from an explicit click on the Rescan button.
 async function rescan(): Promise<void> {
   const uris = tree.scannedUris()
   if (uris.length === 0) {
     vscode.window.showInformationMessage('mlab: nothing to rescan yet. Run a scan first.')
     return
   }
-  for (const uri of uris) await checkLockfile(uri)
+  let failed = 0
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: 'mlab: rescanning', cancellable: true },
+    async (progress, token) => {
+      const controller = new AbortController()
+      token.onCancellationRequested(() => controller.abort())
+      for (let i = 0; i < uris.length && !token.isCancellationRequested; i++) {
+        progress.report({ message: `${basenameOf(uris[i].fsPath)} (${i + 1}/${uris.length})`, increment: 100 / uris.length })
+        const result = await performScan(uris[i], { batch: true, signal: controller.signal })
+        if (result.kind === 'failed') failed++
+      }
+    },
+  )
+  if (failed) {
+    vscode.window.showWarningMessage(`mlab: ${failed} rescan${failed === 1 ? '' : 's'} failed. See the "mlab" output channel.`)
+  }
 }
 
 // Clearing results also drops the cache, which is what removes the red badges in
@@ -628,25 +671,22 @@ function handleScanError(
     output.appendLine(`[error] ${filename}: ${err.kind}: ${err.message}`)
     panel?.error(filename, err.message, err.kind, token)
 
-    // A background scan never interrupts. A rate limit in particular would
-    // otherwise pop on every debounced write for the rest of the hour.
+    // A background scan never interrupts: it already waited out one cooldown.
     if (auto) return
 
-    if (err.kind === 'rate-limit') {
-      const retry = err.retryAfter ? ` Retry after ${err.retryAfter}s.` : ''
-      vscode.window
-        .showWarningMessage(
-          `mlab: rate limit reached.${retry} Use an API token for 25 scans/hour.`,
-          'Get a token',
-          'Add token…',
-        )
-        .then((choice) => {
-          if (choice === 'Get a token') {
-            vscode.env.openExternal(vscode.Uri.parse('https://vuln.mlab.sh/me/tokens'))
-          } else if (choice === 'Add token…') {
-            vscode.commands.executeCommand('mlab.manageToken')
-          }
-        })
+    if (err.kind === 'rate-limit' || err.kind === 'too-large') {
+      // The message is the server's (cooldown or size limit, then what the next
+      // tier unlocks). The buttons lead to that next tier.
+      const actions = err.upgrade?.tier === 'paid' ? ['See plans'] : err.upgrade ? ['Get a token', 'Add token…'] : []
+      vscode.window.showWarningMessage(`mlab: ${err.message}`, ...actions).then((choice) => {
+        if (choice === 'See plans') {
+          vscode.env.openExternal(vscode.Uri.parse(err.upgrade?.url ?? 'https://mlab.sh/account/subscription'))
+        } else if (choice === 'Get a token') {
+          vscode.env.openExternal(vscode.Uri.parse('https://vuln.mlab.sh/me/tokens'))
+        } else if (choice === 'Add token…') {
+          vscode.commands.executeCommand('mlab.manageToken')
+        }
+      })
     } else if (err.kind !== 'cancelled') {
       vscode.window.showErrorMessage(`mlab: ${err.message}`)
     }
@@ -711,9 +751,10 @@ async function clearToken(): Promise<void> {
 }
 
 // ── Scan every lockfile in the workspace ─────────────────────────────────────
-// Quota aware by construction. Cached lockfiles cost nothing, so the sweep first
-// works out how many files would actually hit the network and asks before
-// spending them: the anonymous budget is 8 scans an hour, 25 with a token.
+// Cached lockfiles cost nothing, so the sweep first works out how many files
+// would actually hit the network and asks before uploading them. The server
+// spaces scans by a cooldown (10 s anonymous, 5 s on a free account, none on a
+// paid plan), which performScan waits out between files.
 async function scanWorkspace(): Promise<void> {
   if (config.isDisabled()) {
     vscode.window.showInformationMessage('mlab is disabled for this workspace by .mlab/vuln.yml (disable: true).')
@@ -752,7 +793,7 @@ async function scanWorkspace(): Promise<void> {
     const go = `Scan ${fresh.length}`
     const cachedNote = cached.length ? ` ${cached.length} already cached and free.` : ''
     const choice = await vscode.window.showWarningMessage(
-      `mlab: ${fresh.length} lockfiles need a fresh scan.${cachedNote} That spends ${fresh.length} of your hourly quota (8 anonymous, 25 with a token).`,
+      `mlab: ${fresh.length} lockfiles need a fresh scan.${cachedNote} They are uploaded one at a time, waiting out the scan cooldown in between (10 s anonymous, 5 s with a free account token, none on a paid plan).`,
       { modal: true },
       go,
     )
@@ -794,8 +835,8 @@ async function scanWorkspace(): Promise<void> {
           stopped = 'no-consent'
           break
         } else if (result.kind === 'failed') {
-          // A rate limit will hit every remaining file too, so stop rather than
-          // burn the rest of the run on the same error.
+          // performScan already waited out one cooldown; still refused means
+          // the next files would be too, so stop rather than burn the run.
           if (result.error instanceof ScanError && result.error.kind === 'rate-limit') {
             stopped = 'rate-limit'
             break
@@ -813,7 +854,7 @@ async function scanWorkspace(): Promise<void> {
   output.appendLine(`[sweep] ${line}`)
 
   if (stopped === 'rate-limit') {
-    vscode.window.showWarningMessage(`${line} Stopped early: hourly quota reached.`)
+    vscode.window.showWarningMessage(`${line} Stopped early: the server kept refusing scans (cooldown). See the "mlab" output channel.`)
   } else if (stopped === 'cancelled') {
     vscode.window.showInformationMessage(`${line} Stopped: cancelled.`)
   } else if (stopped === 'no-consent') {

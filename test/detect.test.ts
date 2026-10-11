@@ -34,7 +34,7 @@ test('detection works on full paths and is case-insensitive', () => {
 })
 
 test('unsupported files are rejected', () => {
-  for (const name of ['README.md', 'main.rs', 'yarn.lock', 'Cargo.toml', 'notes.txt']) {
+  for (const name of ['README.md', 'main.rs', 'build.gradle', 'Cargo.toml', 'notes.txt', 'pubspec.yaml']) {
     assert.equal(isSupportedLockfile(name), false, `${name} should not be supported`)
     assert.equal(detectFormat(name), undefined)
   }

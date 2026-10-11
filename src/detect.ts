@@ -10,8 +10,8 @@
 // here by `npm run sync:manifest` and guarded by a test that fails if the two
 // ever drift apart.
 //
-// The basename to format mapping mirrors the server's supported parsers, from
-// mlab-sh/vuln-scan-action (src/index.ts `KNOWN`).
+// The basename to format mapping mirrors the server's supported parsers
+// (vuln.mlab.sh `sbom::pick_format`).
 
 export interface LockfileKind {
   /** Canonical display name, with its real casing. */
@@ -25,11 +25,25 @@ export const LOCKFILES: readonly LockfileKind[] = [
   { name: 'Cargo.lock', format: 'cargo' },
   { name: 'package-lock.json', format: 'npm' },
   { name: 'npm-shrinkwrap.json', format: 'npm' },
+  { name: 'yarn.lock', format: 'yarn' },
+  { name: 'pnpm-lock.yaml', format: 'pnpm' },
   { name: 'composer.lock', format: 'composer' },
   { name: 'Gemfile.lock', format: 'gem' },
   { name: 'go.sum', format: 'go' },
   { name: 'requirements.txt', format: 'pip' },
+  { name: 'poetry.lock', format: 'poetry' },
+  { name: 'uv.lock', format: 'uv' },
+  { name: 'pdm.lock', format: 'pdm' },
+  { name: 'Pipfile.lock', format: 'pipfile' },
+  { name: 'pom.xml', format: 'maven' },
+  { name: 'gradle.lockfile', format: 'maven' },
+  { name: 'packages.lock.json', format: 'nuget' },
+  { name: 'pubspec.lock', format: 'pub' },
+  { name: 'mix.lock', format: 'hex' },
   { name: 'mise.lock', format: 'mise' },
+  // CycloneDX SBOMs under the spec's recommended names (JSON or XML).
+  { name: 'bom.json', format: 'cyclonedx' },
+  { name: 'bom.xml', format: 'cyclonedx' },
 ]
 
 /** Directories excluded when walking a workspace for lockfiles. */

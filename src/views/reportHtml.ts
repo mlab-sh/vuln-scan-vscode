@@ -120,7 +120,8 @@ export function reportHtml(
   opts: RenderOpts,
   scannedAt?: number,
 ): string {
-  const { findings, unresolved, deps, truncated } = outcome
+  const { findings, unresolved, deps, truncated, truncation } = outcome
+  const unscanned = outcome.unscanned ?? []
   const clean = findings.length === 0
 
   const counts: Record<Severity, number> = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 }
@@ -132,7 +133,10 @@ export function reportHtml(
   const exploited = findings.filter((f) => urgencyOf(f.intel) === 'exploited')
 
   const when = scannedAt === undefined ? 'scanned just now' : `cached, scanned ${esc(agoLabel(scannedAt))}`
-  const meta = `${plural(deps, 'dependency', 'dependencies')} · ${when}`
+  const scope = truncation
+    ? `${truncation.scanned} of ${plural(truncation.total_packages, 'dependency', 'dependencies')} scanned`
+    : plural(deps, 'dependency', 'dependencies')
+  const meta = `${scope} · ${when}`
 
   const verdict = clean
     ? `<div class="verdict ok">${icon('shield', 30)}<div>
@@ -149,7 +153,9 @@ export function reportHtml(
      ${stat(vulnerable, 'Vulnerable', vulnerable ? 'bad' : '')}
      ${stat(findings.length, 'Advisories')}
      ${exploited.length ? stat(exploited.length, 'Exploited', 'bad') : ''}
-     ${unresolved.length ? stat(unresolved.length, 'Not scanned', 'warn') : ''}
+     ${unresolved.length + unscanned.length + (truncation?.not_scanned ?? 0)
+       ? stat(unresolved.length + unscanned.length + (truncation?.not_scanned ?? 0), 'Not scanned', 'warn')
+       : ''}
    </div>`
 
   const banners: string[] = []
@@ -167,9 +173,23 @@ export function reportHtml(
       `<div class="banner info">${icon('info')}<span>Cached result. The lockfile has not changed since it was scanned, so nothing was re-uploaded.</span></div>`,
     )
   }
-  if (truncated) {
+  if (truncation) {
+    // The server's own wording: how many were cut, why, and that they are not clean.
+    const up = truncation.upgrade
+      ? ` ${esc(truncation.upgrade.message)} <a href="${esc(truncation.upgrade.url)}">${truncation.upgrade.tier === 'free' ? 'Create a free account' : 'See plans'}</a>`
+      : ''
+    banners.push(`<div class="banner warn">${icon('triangle')}<span>${esc(truncation.message)}${up}</span></div>`)
+  } else if (truncated) {
+    // A result cached by an older version carries only the flag.
     banners.push(
-      `<div class="banner warn">${icon('triangle')}<span>This manifest exceeds the 512 package scan ceiling; only the first 512 packages were scanned.</span></div>`,
+      `<div class="banner warn">${icon('triangle')}<span>This manifest was larger than the scan limit: only the first ${deps} packages were scanned, the rest are <strong>not</strong> counted as clean.</span></div>`,
+    )
+  }
+  if (unscanned.length) {
+    banners.push(
+      `<div class="banner warn">${icon('info')}<span>${plural(unscanned.length, 'entry', 'entries')} of the manifest could not be scanned (git or path dependency, unpinned version, SBOM component without purl or cpe…) and ${unscanned.length === 1 ? 'is' : 'are'} <strong>not</strong> counted as clean: <span class="mono">${esc(
+        unscanned.slice(0, 20).join(', '),
+      )}${unscanned.length > 20 ? ', ...' : ''}</span></span></div>`,
     )
   }
   if (unresolved.length) {
@@ -254,10 +274,12 @@ export function errorHtml(
   kind: string | undefined,
   opts: RenderOpts,
 ): string {
-  const benign = kind === 'unparseable' || kind === 'cancelled'
+  const benign = kind === 'unparseable' || kind === 'cancelled' || kind === 'rate-limit'
   const hint =
     kind === 'rate-limit'
-      ? `Add an API token (command <code>mlab: Manage API token &amp; quota</code>) to raise your quota to 25 scans/hour.`
+      ? `Scans are spaced by a short cooldown; scan again once it has passed. An API token (command <code>mlab: Manage API token &amp; quota</code>) applies your account's limits instead of the anonymous ones.`
+      : kind === 'too-large'
+        ? `Scan the lockfile itself rather than a full SBOM export, or use an API token: larger plans accept larger files.`
       : kind === 'auth'
         ? `Run <code>mlab: Manage API token &amp; quota</code> to update your token.`
         : kind === 'network' || kind === 'timeout'

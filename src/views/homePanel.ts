@@ -178,7 +178,7 @@ export class HomePanel {
           vscode.window.showInformationMessage('mlab: API token cleared.')
         } else {
           await this.context.secrets.store(TOKEN_KEY, token)
-          vscode.window.showInformationMessage('mlab: API token saved. Quota raised to 25 scans/hour.')
+          vscode.window.showInformationMessage("mlab: API token saved. Scans now use your account's limits.")
         }
         await this.render()
         break
@@ -334,8 +334,8 @@ export class HomePanel {
     )
 
     const status = hasToken
-      ? `<div class="status ok"><span class="dot"></span><div><strong>Token set.</strong> You have <strong>25 scans/hour</strong>.</div></div>`
-      : `<div class="status anon"><span class="dot"></span><div><strong>Anonymous.</strong> Limited to <strong>8 scans/hour</strong> per IP. Add a token below for 25/hour.</div></div>`
+      ? `<div class="status ok"><span class="dot"></span><div><strong>Token set.</strong> Scans use your account's limits: <strong>1024 packages</strong> per scan and a 5 s cooldown on Free, <strong>4096</strong> and no cooldown on a paid plan.</div></div>`
+      : `<div class="status anon"><span class="dot"></span><div><strong>Anonymous.</strong> <strong>512 packages</strong> per scan, one scan every 10 s per IP. Add a token below for your account's limits.</div></div>`
 
     const clearBtn = hasToken
       ? `<button id="clear" class="btn ghost" type="button">Remove token</button>`
@@ -382,8 +382,9 @@ export class HomePanel {
 
   <section>
     <h2>API token</h2>
-    <p class="muted">Anonymous scans are capped at 8/hour per IP. A personal token raises this to 25/hour.
-      Stored in VS Code SecretStorage, never in your settings or workspace.</p>
+    <p class="muted">Anonymous scans cover 512 packages, one scan every 10 s per IP. With a personal token
+      a free account covers 1024 packages with a 5 s cooldown, a paid plan 4096 with none, and the scans
+      land in your history. Stored in VS Code SecretStorage, never in your settings or workspace.</p>
     <ol class="steps">
       <li>Open <a id="tokens-link" href="#">vuln.mlab.sh/me/tokens</a> and generate a personal token.</li>
       <li>Paste it below and click <em>Save token</em>.</li>

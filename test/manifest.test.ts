@@ -77,7 +77,7 @@ test('the when clause actually matches the lockfiles and rejects other files', (
   for (const name of SUPPORTED_BASENAMES) {
     assert.ok(re.test(name), `${name} should match the menu clause`)
   }
-  for (const name of ['README.md', 'Cargo.toml', 'yarn.lock', 'main.rs', 'package.json']) {
+  for (const name of ['README.md', 'Cargo.toml', 'build.gradle', 'main.rs', 'package.json', 'my-bom.json']) {
     assert.equal(re.test(name), false, `${name} should not match`)
   }
 })

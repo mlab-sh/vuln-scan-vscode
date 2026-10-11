@@ -68,6 +68,10 @@ export function locateLine(text: string, name: string, version: string): Hit {
     if (fallback === -1) fallback = i
   }
   if (fallback !== -1) return at(lines, fallback, name)
+  // A Maven coordinate `group:artifact` never appears whole in a pom.xml, where
+  // the two halves sit on separate lines: look for the artifact.
+  const colon = name.lastIndexOf(':')
+  if (colon > 0) return locateLine(text, name.slice(colon + 1), version)
   return { line: 0, col: 0, endCol: Math.min(lines[0]?.length ?? 0, 200) }
 }
 

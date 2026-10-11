@@ -6,7 +6,7 @@ import { ScanOutcome } from './api/client'
 // The point is that a lockfile's scan result is a pure function of its content:
 // the same bytes always resolve to the same advisories. So we can skip the
 // network entirely until the file actually changes, which is what makes auto
-// scanning affordable against an 8 scans/hour anonymous quota.
+// scanning cheap: no upload, no wait on the server's scan cooldown.
 //
 // Two time bounds, doing different jobs. Do not confuse them:
 //   - FRESHNESS (`DEFAULT_MAX_AGE_MS`) is how long a hit is trusted for. Past it

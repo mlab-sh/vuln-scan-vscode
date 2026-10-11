@@ -11,7 +11,7 @@ import * as config from './config'
 // all. `activate()` still makes zero network calls.
 //
 // Writes are debounced because a single `npm install` rewrites the lockfile
-// several times in a row, and each real scan costs one unit of an hourly quota.
+// several times in a row, and the server spaces scans by a cooldown of a few seconds.
 
 export const DEBOUNCE_MS = 4000
 

@@ -8,7 +8,11 @@ import { scoreOf } from './cvss'
 import {
   Finding,
   OsvVuln,
+  ScanRefusal,
   ScanResponse,
+  ScanTier,
+  ScanTruncation,
+  ScanUpgrade,
   Severity,
   SEV_RANK,
 } from './types'
@@ -40,9 +44,18 @@ export function severityOf(v: OsvVuln): Severity {
   return 'unknown'
 }
 
-/** Prefer a CVE alias; fall back to the advisory id (vuln-scan-action logic). */
+/**
+ * The CVE an advisory is about, the way the server picks it: an alias first,
+ * then `upstream` (Debian and Ubuntu records list their CVEs there, not in
+ * aliases), then a CVE embedded in the id (`DEBIAN-CVE-2024-1234`). Falls back
+ * to the advisory id when there is no CVE at all.
+ */
 export function cveOf(v: OsvVuln): string {
-  return v.aliases?.find((a) => a.startsWith('CVE-')) ?? v.id ?? 'UNKNOWN'
+  for (const s of [...(v.aliases ?? []), ...(v.upstream ?? []), v.id ?? '']) {
+    const m = /CVE-\d{4}-\d{4,}/i.exec(s)
+    if (m) return m[0].toUpperCase()
+  }
+  return v.id ?? 'UNKNOWN'
 }
 
 /** Last non-empty `fixed` event across all affected ranges, if any. */
@@ -74,16 +87,22 @@ export interface ScanOutcome {
   findings: Finding[]
   /** `name@version` of packages the scanner could not resolve (upstream). */
   unresolved: string[]
-  /** Total dependencies parsed by the server. */
+  /** Dependencies scanned by the server (after any truncation). */
   deps: number
-  /** True when the manifest exceeded the 512-package scan ceiling. */
+  /** True when the manifest had more packages than the caller's tier scans. */
   truncated: boolean
+  /** The server's account of the cut: counts, message, the way up. */
+  truncation?: ScanTruncation
+  /** Entries the server parsed but could not scan (git/path deps, …). */
+  unscanned?: string[]
+  tier?: ScanTier
   hash: string
 }
 
 export type ScanErrorKind =
   | 'auth'
   | 'rate-limit'
+  | 'too-large'
   | 'unparseable'
   | 'timeout'
   | 'cancelled'
@@ -95,11 +114,46 @@ export class ScanError extends Error {
   constructor(
     message: string,
     readonly kind: ScanErrorKind,
+    /** Seconds, for a cooldown (429). */
     readonly retryAfter?: string,
+    /** What the next tier unlocks, when a limit was hit. */
+    readonly upgrade?: ScanUpgrade,
   ) {
     super(message)
     this.name = 'ScanError'
   }
+}
+
+/**
+ * The error for a refused scan. The server states the reason itself (cooldown,
+ * size limit, unparseable manifest), so its `message` is shown as is, followed
+ * by what the next tier unlocks when a limit was hit.
+ */
+export function errorFor(status: number, body: ScanRefusal | undefined, retryHeader: string | null, filename: string): ScanError {
+  const b = body ?? {}
+  const withUpgrade = (msg: string) => (b.upgrade ? `${msg} ${b.upgrade.message}` : msg)
+  if (status === 401) {
+    return new ScanError('Invalid or revoked API token (401). Set a new token.', 'auth')
+  }
+  if (status === 429) {
+    const retry = b.retry_after_secs !== undefined ? String(b.retry_after_secs) : retryHeader ?? undefined
+    return new ScanError(
+      withUpgrade(b.message ?? `Too many scans (429).${retry ? ` Retry in ${retry} s.` : ''}`),
+      'rate-limit',
+      retry,
+      b.upgrade,
+    )
+  }
+  if (status === 413) {
+    return new ScanError(withUpgrade(b.message ?? `${filename} is too large to scan (413).`), 'too-large', undefined, b.upgrade)
+  }
+  if (status === 422) {
+    return new ScanError(
+      `No dependencies could be parsed from ${filename} (422). Try forcing a format.`,
+      'unparseable',
+    )
+  }
+  return new ScanError(`Scan failed: HTTP ${status}${b.message ? `: ${b.message}` : '.'}`, 'http')
 }
 
 // ── Scan ─────────────────────────────────────────────────────────────────────
@@ -142,25 +196,9 @@ export async function scanLockfile(req: ScanRequest): Promise<ScanOutcome> {
     req.signal?.removeEventListener('abort', onExternalAbort)
   }
 
-  if (resp.status === 401) {
-    throw new ScanError('Invalid or revoked API token (401). Set a new token.', 'auth')
-  }
-  if (resp.status === 429) {
-    const retry = resp.headers.get('retry-after') ?? undefined
-    throw new ScanError(
-      'Rate limit reached (429). Anonymous scans are capped at 8/hour per IP; an API token raises this to 25/hour.',
-      'rate-limit',
-      retry ?? undefined,
-    )
-  }
-  if (resp.status === 422) {
-    throw new ScanError(
-      `No dependencies could be parsed from ${req.filename} (422). Try forcing a format.`,
-      'unparseable',
-    )
-  }
   if (!resp.ok) {
-    throw new ScanError(`Scan failed: HTTP ${resp.status} ${resp.statusText}.`, 'http')
+    const body = (await resp.json().catch(() => undefined)) as ScanRefusal | undefined
+    throw errorFor(resp.status, body, resp.headers.get('retry-after'), req.filename)
   }
 
   let data: ScanResponse
@@ -224,7 +262,10 @@ export function buildOutcome(data: ScanResponse): ScanOutcome {
     findings,
     unresolved,
     deps: data.count,
-    truncated: data.truncated,
+    truncated: data.truncated || data.truncation !== undefined,
+    truncation: data.truncation,
+    unscanned: data.unscanned?.length ? data.unscanned : undefined,
+    tier: data.tier,
     hash: data.hash,
   }
 }

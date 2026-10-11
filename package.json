@@ -2,7 +2,7 @@
   "name": "vuln-scan",
   "displayName": "mlab security",
   "description": "CVE scanning for your lockfiles, powered by mlab. Nothing is uploaded until you agree once; after that, changed lockfiles are rescanned automatically and results are cached per content.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "publisher": "mlab-sh",
   "license": "MIT",
   "repository": {
@@ -28,7 +28,7 @@
   "main": "./dist/extension.js",
   "browser": "./dist/web/extension.js",
   "activationEvents": [
-    "workspaceContains:**/{Cargo.lock,package-lock.json,npm-shrinkwrap.json,composer.lock,Gemfile.lock,go.sum,requirements.txt,mise.lock}"
+    "workspaceContains:**/{Cargo.lock,package-lock.json,npm-shrinkwrap.json,yarn.lock,pnpm-lock.yaml,composer.lock,Gemfile.lock,go.sum,requirements.txt,poetry.lock,uv.lock,pdm.lock,Pipfile.lock,pom.xml,gradle.lockfile,packages.lock.json,pubspec.lock,mix.lock,mise.lock,bom.json,bom.xml}"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -114,24 +114,24 @@
       "explorer/context": [
         {
           "command": "mlab.showReport",
-          "when": "resourceFilename =~ /^(Cargo\\.lock|package-lock\\.json|npm-shrinkwrap\\.json|composer\\.lock|Gemfile\\.lock|go\\.sum|requirements\\.txt|mise\\.lock)$/i",
+          "when": "resourceFilename =~ /^(Cargo\\.lock|package-lock\\.json|npm-shrinkwrap\\.json|yarn\\.lock|pnpm-lock\\.yaml|composer\\.lock|Gemfile\\.lock|go\\.sum|requirements\\.txt|poetry\\.lock|uv\\.lock|pdm\\.lock|Pipfile\\.lock|pom\\.xml|gradle\\.lockfile|packages\\.lock\\.json|pubspec\\.lock|mix\\.lock|mise\\.lock|bom\\.json|bom\\.xml)$/i",
           "group": "2_workspace@99"
         },
         {
           "command": "mlab.checkLockfile",
-          "when": "resourceFilename =~ /^(Cargo\\.lock|package-lock\\.json|npm-shrinkwrap\\.json|composer\\.lock|Gemfile\\.lock|go\\.sum|requirements\\.txt|mise\\.lock)$/i",
+          "when": "resourceFilename =~ /^(Cargo\\.lock|package-lock\\.json|npm-shrinkwrap\\.json|yarn\\.lock|pnpm-lock\\.yaml|composer\\.lock|Gemfile\\.lock|go\\.sum|requirements\\.txt|poetry\\.lock|uv\\.lock|pdm\\.lock|Pipfile\\.lock|pom\\.xml|gradle\\.lockfile|packages\\.lock\\.json|pubspec\\.lock|mix\\.lock|mise\\.lock|bom\\.json|bom\\.xml)$/i",
           "group": "2_workspace@100"
         }
       ],
       "editor/context": [
         {
           "command": "mlab.showReport",
-          "when": "resourceFilename =~ /^(Cargo\\.lock|package-lock\\.json|npm-shrinkwrap\\.json|composer\\.lock|Gemfile\\.lock|go\\.sum|requirements\\.txt|mise\\.lock)$/i",
+          "when": "resourceFilename =~ /^(Cargo\\.lock|package-lock\\.json|npm-shrinkwrap\\.json|yarn\\.lock|pnpm-lock\\.yaml|composer\\.lock|Gemfile\\.lock|go\\.sum|requirements\\.txt|poetry\\.lock|uv\\.lock|pdm\\.lock|Pipfile\\.lock|pom\\.xml|gradle\\.lockfile|packages\\.lock\\.json|pubspec\\.lock|mix\\.lock|mise\\.lock|bom\\.json|bom\\.xml)$/i",
           "group": "2_workspace@99"
         },
         {
           "command": "mlab.checkLockfile",
-          "when": "resourceFilename =~ /^(Cargo\\.lock|package-lock\\.json|npm-shrinkwrap\\.json|composer\\.lock|Gemfile\\.lock|go\\.sum|requirements\\.txt|mise\\.lock)$/i",
+          "when": "resourceFilename =~ /^(Cargo\\.lock|package-lock\\.json|npm-shrinkwrap\\.json|yarn\\.lock|pnpm-lock\\.yaml|composer\\.lock|Gemfile\\.lock|go\\.sum|requirements\\.txt|poetry\\.lock|uv\\.lock|pdm\\.lock|Pipfile\\.lock|pom\\.xml|gradle\\.lockfile|packages\\.lock\\.json|pubspec\\.lock|mix\\.lock|mise\\.lock|bom\\.json|bom\\.xml)$/i",
           "group": "2_workspace@100"
         },
         {
@@ -212,7 +212,7 @@
     "viewsWelcome": [
       {
         "view": "mlab.findings",
-        "contents": "No scan has been run yet.\n\nNothing is sent to vuln.mlab.sh until you agree once. After that, lockfiles are rescanned automatically when their contents change, and unchanged files are served from cache.\n\nRight-click a lockfile in the Explorer, or start from here.\n[Check for lock vulnerabilities](command:mlab.checkLockfile)\n[Scan all lockfiles in workspace](command:mlab.scanWorkspace)\n\nQuota, API token and settings live on the mlab page.\n[Open mlab](command:mlab.openHome)\n\nSupported lockfiles: Cargo.lock, package-lock.json, npm-shrinkwrap.json, composer.lock, Gemfile.lock, go.sum, requirements.txt, mise.lock.",
+        "contents": "No scan has been run yet.\n\nNothing is sent to vuln.mlab.sh until you agree once. After that, lockfiles are rescanned automatically when their contents change, and unchanged files are served from cache.\n\nRight-click a lockfile in the Explorer, or start from here.\n[Check for lock vulnerabilities](command:mlab.checkLockfile)\n[Scan all lockfiles in workspace](command:mlab.scanWorkspace)\n\nQuota, API token and settings live on the mlab page.\n[Open mlab](command:mlab.openHome)\n\nSupported lockfiles: Cargo.lock, package-lock.json, npm-shrinkwrap.json, yarn.lock, pnpm-lock.yaml, composer.lock, Gemfile.lock, go.sum, requirements.txt, poetry.lock, uv.lock, pdm.lock, Pipfile.lock, pom.xml, gradle.lockfile, packages.lock.json, pubspec.lock, mix.lock, mise.lock, bom.json, bom.xml.",
         "when": "!mlab.disabled"
       },
       {

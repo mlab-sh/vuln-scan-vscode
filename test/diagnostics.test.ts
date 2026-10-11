@@ -117,3 +117,9 @@ test('an empty file does not produce an out of range position', () => {
   assert.equal(hit.col, 0)
   assert.equal(hit.endCol, 0)
 })
+
+test('a Maven group:artifact lands on its artifactId line in a pom.xml', () => {
+  const text = fixture('pom.xml')
+  const hit = locateLine(text, 'org.apache.logging.log4j:log4j-core', '2.14.1')
+  assert.equal(text.split('\n')[hit.line].trim(), '<artifactId>log4j-core</artifactId>')
+})

@@ -7,6 +7,8 @@
 export interface OsvVuln {
   id?: string
   aliases?: string[]
+  /** CVEs a distro record (Debian, Ubuntu) is about, when `aliases` is empty. */
+  upstream?: string[]
   summary?: string
   details?: string
   database_specific?: { severity?: string }
@@ -31,19 +33,65 @@ export interface ScanPackage {
   ecosystem?: string
   name?: string
   version?: string
+  /** Set for an SBOM component known only by its CPE (`ecosystem` is "CPE"). */
+  cpe?: string
+}
+
+/** The caller's tier: anonymous, a free account, or a paid plan. */
+export type ScanTier = 'anonymous' | 'free' | 'paid'
+
+/** Limits of a tier, as the server states them in every response. */
+export interface ScanLimits {
+  max_packages: number
+  /** 0 means no cooldown. */
+  cooldown_secs: number
+  max_body_bytes: number
+}
+
+/** The next tier up and what it unlocks, sent with any limit that was hit. */
+export interface ScanUpgrade extends ScanLimits {
+  tier: ScanTier
+  message: string
+  url: string
+}
+
+/** Present when the manifest had more packages than the tier scans. */
+export interface ScanTruncation {
+  total_packages: number
+  scanned: number
+  not_scanned: number
+  message: string
+  upgrade?: ScanUpgrade
 }
 
 /** Full JSON body returned by POST /api/v2/scan. */
 export interface ScanResponse {
   hash: string
+  /** Packages scanned (after any truncation). */
   count: number
   truncated: boolean
+  truncation?: ScanTruncation
+  tier?: ScanTier
+  limits?: ScanLimits
+  /** Entries the server parsed but could not turn into a coordinate (git or path deps, unpinned requirements, SBOM components without purl or cpe). */
+  unscanned?: string[]
   cached?: boolean
   logged_in?: boolean
   outage?: boolean
   ttl?: number
   packages?: ScanPackage[]
   results: ScanResult[]
+}
+
+/** Body of a refused scan: 429 (cooldown), 413 (too large), 422, 400. */
+export interface ScanRefusal {
+  error?: string
+  message?: string
+  hint?: string
+  retry_after_secs?: number
+  tier?: ScanTier
+  limits?: ScanLimits
+  upgrade?: ScanUpgrade
 }
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'unknown'

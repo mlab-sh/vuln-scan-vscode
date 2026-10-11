@@ -5,6 +5,7 @@ import {
   cveOf,
   fixedVersionOf,
   buildOutcome,
+  errorFor,
   summarize,
 } from '../src/api/client'
 import { baseScoreV3, roundUp, scoreOf } from '../src/api/cvss'
@@ -286,4 +287,69 @@ test('a single package is not pluralised', () => {
     unresolved: [], deps: 1, truncated: false, hash: 'h',
   }
   assert.equal(summarize(out), '1 high across 1 package')
+})
+
+// ── API changes: distro CVEs, tiers, truncation, refusals ────────────────────
+
+test('cveOf reads upstream and the id itself, as the server does', () => {
+  assert.equal(cveOf({ id: 'GHSA-x', aliases: ['CVE-2021-44228'] }), 'CVE-2021-44228')
+  assert.equal(cveOf({ id: 'DSA-5000-1', upstream: ['CVE-2023-0001', 'CVE-2023-0002'] }), 'CVE-2023-0001')
+  assert.equal(cveOf({ id: 'DEBIAN-CVE-2023-5363', aliases: [] }), 'CVE-2023-5363')
+  assert.equal(cveOf({ id: 'GHSA-only', aliases: ['PYSEC-2024-1'] }), 'GHSA-only')
+})
+
+const upgradeToFree = {
+  tier: 'free' as const, max_packages: 1024, cooldown_secs: 5, max_body_bytes: 8388608,
+  message: 'Create a free account to scan up to 1024 packages per scan (8 MiB per request), with a 5 second cooldown.',
+  url: 'https://vuln.mlab.sh/sso/login?next=/scan',
+}
+
+test('a truncated scan carries the server account of the cut, unscanned entries and tier', () => {
+  const out = buildOutcome({
+    ...duplicated,
+    truncated: true,
+    tier: 'anonymous',
+    truncation: {
+      total_packages: 600, scanned: 512, not_scanned: 88, upgrade: upgradeToFree,
+      message: 'Only the first 512 of 600 packages were scanned: anonymous scans are limited to 512 packages. The other 88 were NOT checked and must not be read as clean.',
+    },
+    unscanned: ['pub flutter (sdk)'],
+  })
+  assert.equal(out.truncated, true)
+  assert.equal(out.truncation?.not_scanned, 88)
+  assert.equal(out.truncation?.upgrade?.tier, 'free')
+  assert.deepEqual(out.unscanned, ['pub flutter (sdk)'])
+  assert.equal(out.tier, 'anonymous')
+  // An empty unscanned list is not carried around.
+  assert.equal(buildOutcome({ ...duplicated, unscanned: [] }).unscanned, undefined)
+})
+
+test('a cooldown (429) shows the server message, the way up, and the delay', () => {
+  const err = errorFor(429, {
+    error: 'cooldown', retry_after_secs: 7, tier: 'anonymous', upgrade: upgradeToFree,
+    message: 'Anonymous scans are limited to one every 10 seconds. Retry in 7 seconds.',
+  }, '7', 'Cargo.lock')
+  assert.equal(err.kind, 'rate-limit')
+  assert.equal(err.retryAfter, '7')
+  assert.equal(err.upgrade?.tier, 'free')
+  assert.equal(err.message, 'Anonymous scans are limited to one every 10 seconds. Retry in 7 seconds. ' + upgradeToFree.message)
+  // An older server without a JSON body still yields a usable cooldown.
+  const bare = errorFor(429, undefined, '10', 'Cargo.lock')
+  assert.equal(bare.retryAfter, '10')
+  assert.match(bare.message, /Retry in 10 s/)
+})
+
+test('a body over the tier cap (413) is its own kind, with the server message', () => {
+  const err = errorFor(413, { error: 'payload_too_large', message: 'The request body is larger than 4 MiB, the anonymous limit.', upgrade: upgradeToFree }, null, 'bom.json')
+  assert.equal(err.kind, 'too-large')
+  assert.ok(err.message.startsWith('The request body is larger than 4 MiB'))
+  assert.ok(err.message.endsWith(upgradeToFree.message))
+})
+
+test('422 and 401 keep their meaning; anything else reports the status', () => {
+  assert.equal(errorFor(422, { error: 'no_dependencies' }, null, 'x.lock').kind, 'unparseable')
+  assert.equal(errorFor(401, undefined, null, 'x.lock').kind, 'auth')
+  const other = errorFor(400, { error: 'fetch_failed', message: 'fetching the manifest returned HTTP 404' }, null, 'x.lock')
+  assert.equal(other.kind, 'http')
+  assert.equal(other.message, 'Scan failed: HTTP 400: fetching the manifest returned HTTP 404')
 })
