@@ -158,6 +158,7 @@ the native settings editor stays one click away.
 | Setting | Default | Description |
 | --- | --- | --- |
 | `mlab.autoScan` | `true` | Rescan a lockfile when its contents change. Never uploads anything before you have consented once. |
+| `mlab.ignoreGitIgnored` | `true` | Skip lockfiles that git ignores in the workspace sweep and automatic rescans. An explicit check still scans the file. |
 | `mlab.analyzeSelection` | `true` | Offer **Analyze selection** in the editor context menu. |
 | `mlab.platformUrl` | `https://mlab.sh/api/v1` | Platform API base, for indicator lookups. |
 | `mlab.cveHover` | `true` | Show CVSS, EPSS and known-exploited status when you hover a CVE identifier. Only the identifier is looked up. |

@@ -21,6 +21,7 @@ import { Finding } from './api/types'
 import { lookup, scanDomain, webUrlFor, IndicatorError } from './api/indicator'
 import { clean, detectKind, isSupported, costsQuota, isActive, kindLabel, MAX_LENGTH } from './ioc'
 import { AutoScanner } from './autoscan'
+import { dropGitIgnored } from './gitignore'
 import { LockfileDiagnostics } from './diagnostics'
 import * as config from './config'
 import { scanLockfile, ScanError, summarize, ScanOutcome } from './api/client'
@@ -84,7 +85,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // red and listed rather than looking clean until the next scan.
   void rehydrate()
 
-  autoScanner = new AutoScanner((uri) => void checkLockfile(uri, { auto: true }))
+  autoScanner = new AutoScanner(async (uri) => {
+    if (config.get('ignoreGitIgnored') === true && (await dropGitIgnored([uri])).length === 0) {
+      output.appendLine(`[auto] ${basenameOf(uri.fsPath)}: skipped, ignored by git`)
+      return
+    }
+    void checkLockfile(uri, { auto: true })
+  })
   context.subscriptions.push(autoScanner)
   autoScanner.sync()
   // `.mlab` files live outside the VS Code config system, so the page tells us
@@ -140,6 +147,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   })
   register('mlab.analyzeSelection', () => void analyzeSelection())
   register('mlab.openHome', () => HomePanel.show(ctx))
+  register('mlab.openSettings', () =>
+    vscode.commands.executeCommand('workbench.action.openSettings', 'mlab.'),
+  )
   register('mlab.manageToken', () => HomePanel.show(ctx))
 
   // Make the empty state explicit rather than relying on an unset context key,
@@ -679,7 +689,8 @@ async function scanWorkspace(): Promise<void> {
     return
   }
 
-  const found = await vscode.workspace.findFiles(lockfileGlob(), excludeGlob())
+  let found = await vscode.workspace.findFiles(lockfileGlob(), excludeGlob())
+  if (config.get('ignoreGitIgnored') === true) found = await dropGitIgnored(found)
   if (found.length === 0) {
     vscode.window.showInformationMessage('mlab: no supported lockfile found in this workspace.')
     return

@@ -50,6 +50,12 @@ const SETTINGS: SettingDesc[] = [
     hint: 'Rescan a lockfile when its contents change. Results are cached per content, so an unchanged file is never re-uploaded, and nothing is uploaded at all before you accept the privacy prompt.',
   },
   {
+    key: 'ignoreGitIgnored',
+    label: 'Skip gitignored lockfiles',
+    kind: 'boolean',
+    hint: 'Leave out lockfiles that git ignores (build output, vendored copies, fixtures) from the workspace scan and automatic rescans. Right-clicking a file still scans it.',
+  },
+  {
     key: 'analyzeSelection',
     label: 'Analyze selection in the context menu',
     kind: 'boolean',

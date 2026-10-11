@@ -94,6 +94,12 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "mlab.openSettings",
+        "title": "Open settings",
+        "category": "mlab",
+        "icon": "$(gear)"
+      },
+      {
         "command": "mlab.openLockfile",
         "title": "Open lockfile",
         "category": "mlab"
@@ -134,6 +140,11 @@
           "command": "mlab.openHome",
           "when": "view == mlab.findings",
           "group": "navigation@1"
+        },
+        {
+          "command": "mlab.openSettings",
+          "when": "view == mlab.findings",
+          "group": "navigation@4"
         },
         {
           "command": "mlab.rescan",
@@ -206,6 +217,11 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Rescan a lockfile automatically when its contents change. Results are cached per file content, so an unchanged lockfile is never re-uploaded. Nothing is ever uploaded before you have accepted the one time privacy prompt, so this setting produces no network traffic until then."
+        },
+        "mlab.ignoreGitIgnored": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Skip lockfiles that git ignores (any `.gitignore`, `.git/info/exclude` or global excludes) in **Scan all lockfiles in workspace** and automatic rescans. Checking a file explicitly still scans it. Needs the built in Git extension, so it has no effect on vscode.dev."
         },
         "mlab.cveHover": {
           "type": "boolean",

@@ -27,6 +27,8 @@ export interface MlabConfig {
   severityFloor: 'any' | 'low' | 'medium' | 'high' | 'critical'
   timeoutMs: number
   autoScan: boolean
+  /** Skip lockfiles that git ignores, in the workspace sweep and auto scans. */
+  ignoreGitIgnored: boolean
   cveHover: boolean
   analyzeSelection: boolean
 }
@@ -37,6 +39,7 @@ export const DEFAULTS: MlabConfig = {
   severityFloor: 'any',
   timeoutMs: 30000,
   autoScan: true,
+  ignoreGitIgnored: true,
   cveHover: true,
   analyzeSelection: true,
 }

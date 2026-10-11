@@ -20,7 +20,7 @@ export class AutoScanner {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>()
   private disposed = false
 
-  constructor(private readonly onChanged: (uri: vscode.Uri) => void) {}
+  constructor(private readonly onChanged: (uri: vscode.Uri) => unknown) {}
 
   /** Start or stop watching to match the current `autoScan` setting. */
   sync(): void {
