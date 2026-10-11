@@ -96,13 +96,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   autoScanner.sync()
   // `.mlab` files live outside the VS Code config system, so the page tells us
   // directly when one is written.
+  let wasDisabled = config.isDisabled()
   const onSettingsChanged = () => {
+    // `disable: true` in .mlab/vuln.yml hides every result without dropping the
+    // cache, so removing the line brings them straight back.
+    const disabled = config.isDisabled()
+    if (disabled !== wasDisabled) {
+      wasDisabled = disabled
+      if (disabled) {
+        tree.clear()
+        diagnostics.clear()
+        syncView()
+        decorations.refresh()
+      } else {
+        void rehydrate()
+      }
+    }
     // The menu entry is gated on a context key, which has to be kept in step
     // with the setting by hand: `when` clauses cannot read configuration.
     void vscode.commands.executeCommand(
       'setContext',
       'mlab.analyzeSelection',
-      config.get('analyzeSelection') === true,
+      config.get('analyzeSelection') === true && !config.isDisabled(),
     )
     autoScanner.sync()
     void refreshDiagnostics()
@@ -166,6 +181,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
  * folder are pruned, so a deleted lockfile does not linger forever.
  */
 async function rehydrate(): Promise<void> {
+  if (config.isDisabled()) return
   let restored = 0
   for (const key of cache.paths()) {
     const uri = uriOf(key)
@@ -212,6 +228,7 @@ async function setDiagnosticsFor(uri: vscode.Uri, outcome: ScanOutcome): Promise
 
 /** Re-publish every diagnostic, e.g. after `severityFloor` changed. */
 async function refreshDiagnostics(): Promise<void> {
+  if (config.isDisabled()) return
   for (const key of cache.paths()) {
     const entry = cache.peek(key)
     if (entry) await setDiagnosticsFor(uriOf(key), entry.outcome)
@@ -247,7 +264,7 @@ interface ScanOpts {
 type ScanResult =
   | { kind: 'cached'; outcome: ScanOutcome }
   | { kind: 'scanned'; outcome: ScanOutcome }
-  | { kind: 'skipped'; reason: 'unsupported' | 'untrusted' | 'no-consent' | 'unreadable' }
+  | { kind: 'skipped'; reason: 'unsupported' | 'untrusted' | 'no-consent' | 'unreadable' | 'disabled' }
   | { kind: 'failed'; error: unknown }
 
 async function performScan(uri: vscode.Uri, opts: ScanOpts): Promise<ScanResult> {
@@ -255,6 +272,7 @@ async function performScan(uri: vscode.Uri, opts: ScanOpts): Promise<ScanResult>
   const quiet = auto || opts.batch === true
   const filename = basenameOf(uri.fsPath)
 
+  if (config.isDisabled()) return { kind: 'skipped', reason: 'disabled' }
   if (!isSupportedLockfile(uri.fsPath)) return { kind: 'skipped', reason: 'unsupported' }
   if (!vscode.workspace.isTrusted) return { kind: 'skipped', reason: 'untrusted' }
 
@@ -395,6 +413,8 @@ async function checkLockfile(resource?: vscode.Uri, opts: ScanOpts = {}): Promis
       vscode.window.showWarningMessage(
         'mlab: scanning is disabled in Restricted Mode because it uploads the lockfile. Trust this workspace to scan.',
       )
+    } else if (result.reason === 'disabled') {
+      vscode.window.showInformationMessage('mlab is disabled for this workspace by .mlab/vuln.yml (disable: true).')
     } else if (result.reason === 'unreadable') {
       vscode.window.showErrorMessage(`mlab: could not read ${filename}.`)
     }
@@ -424,6 +444,10 @@ async function checkLockfile(resource?: vscode.Uri, opts: ScanOpts = {}): Promis
 // explicit act, which is why this needs no separate consent: nothing is read
 // from the file beyond what the user highlighted.
 async function analyzeSelection(): Promise<void> {
+  if (config.isDisabled()) {
+    vscode.window.showInformationMessage('mlab is disabled for this workspace by .mlab/vuln.yml (disable: true).')
+    return
+  }
   const editor = vscode.window.activeTextEditor
   if (!editor) {
     vscode.window.showInformationMessage('mlab: select an indicator in an editor first.')
@@ -682,6 +706,10 @@ async function clearToken(): Promise<void> {
 // works out how many files would actually hit the network and asks before
 // spending them: the anonymous budget is 8 scans an hour, 25 with a token.
 async function scanWorkspace(): Promise<void> {
+  if (config.isDisabled()) {
+    vscode.window.showInformationMessage('mlab is disabled for this workspace by .mlab/vuln.yml (disable: true).')
+    return
+  }
   if (!vscode.workspace.isTrusted) {
     vscode.window.showWarningMessage(
       'mlab: scanning is disabled in Restricted Mode because it uploads the lockfile. Trust this workspace to scan.',

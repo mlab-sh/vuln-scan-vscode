@@ -1,5 +1,6 @@
 import * as vscode from 'vscode'
 import { homeDir } from './platform'
+import { parseFlatYaml } from './flatYaml'
 
 // Layered configuration for mlab.
 //
@@ -8,6 +9,9 @@ import { homeDir } from './platform'
 // can be committed to share one configuration across a team.
 //
 // Precedence, highest first:
+//   0. <workspace>/.mlab/vuln.yml      hand written override, never written by
+//                                      the extension; `disable: true` turns the
+//                                      extension off for this workspace
 //   1. <workspace>/.mlab/config.json   committed with the repo, team wide
 //   2. ~/.mlab/config.json             personal, all workspaces (desktop only)
 //   3. VS Code settings `mlab.*`       what existing installs already use
@@ -19,6 +23,7 @@ import { homeDir } from './platform'
 
 export const CONFIG_DIRNAME = '.mlab'
 export const CONFIG_FILENAME = 'config.json'
+export const OVERRIDE_FILENAME = 'vuln.yml'
 
 export interface MlabConfig {
   apiUrl: string
@@ -45,7 +50,7 @@ export const DEFAULTS: MlabConfig = {
 }
 
 /** Which layer a value came from, so the UI can say so out loud. */
-export type Layer = 'workspace-file' | 'user-file' | 'vscode' | 'default'
+export type Layer = 'override-file' | 'workspace-file' | 'user-file' | 'vscode' | 'default'
 
 export type Scope = 'workspace' | 'user'
 
@@ -74,6 +79,27 @@ function uriFor(scope: Scope): vscode.Uri | undefined {
 // snapshot, filled by `load()` at activation and refreshed by `watch()` and by
 // every write.
 let files: Record<Scope, Partial<MlabConfig>> = { workspace: {}, user: {} }
+let override: Partial<MlabConfig> & { disable?: unknown } = {}
+
+function overrideUri(): vscode.Uri | undefined {
+  const folder = vscode.workspace.workspaceFolders?.[0]
+  return folder && vscode.Uri.joinPath(folder.uri, CONFIG_DIRNAME, OVERRIDE_FILENAME)
+}
+
+async function readOverride(): Promise<typeof override> {
+  const uri = overrideUri()
+  if (!uri) return {}
+  try {
+    return parseFlatYaml(new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)))
+  } catch {
+    return {} // absent
+  }
+}
+
+/** True when `.mlab/vuln.yml` says `disable: true`. */
+export function isDisabled(): boolean {
+  return override.disable === true
+}
 
 /** Parse a config file, tolerating absence. Malformed JSON is surfaced once. */
 async function readFile(uri: vscode.Uri | undefined): Promise<Partial<MlabConfig>> {
@@ -97,15 +123,19 @@ async function readFile(uri: vscode.Uri | undefined): Promise<Partial<MlabConfig
 
 /** (Re)read both config files into the snapshot. */
 export async function load(): Promise<void> {
-  const [workspace, user] = await Promise.all([
+  const [workspace, user, yml] = await Promise.all([
     readFile(uriFor('workspace')),
     readFile(uriFor('user')),
+    readOverride(),
   ])
   files = { workspace, user }
+  override = yml
 }
 
 /** Resolve one key through every layer, reporting which one won. */
 export function resolve<K extends keyof MlabConfig>(key: K): Resolved<K> {
+  if (override[key] !== undefined) return { value: override[key] as MlabConfig[K], layer: 'override-file' }
+
   const ws = files.workspace
   if (ws[key] !== undefined) return { value: ws[key] as MlabConfig[K], layer: 'workspace-file' }
 
@@ -205,6 +235,10 @@ export function watch(onChanged: () => void): vscode.Disposable {
       new vscode.RelativePattern(folder, `${CONFIG_DIRNAME}/${CONFIG_FILENAME}`),
     )
     subs.push(w, w.onDidChange(changed), w.onDidCreate(changed), w.onDidDelete(changed))
+    const o = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(folder, `${CONFIG_DIRNAME}/${OVERRIDE_FILENAME}`),
+    )
+    subs.push(o, o.onDidChange(changed), o.onDidCreate(changed), o.onDidDelete(changed))
   }
 
   // The user file is outside every workspace folder, so it needs its own
@@ -223,6 +257,8 @@ export function watch(onChanged: () => void): vscode.Disposable {
 /** Human label for a layer, used by the settings page badges. */
 export function layerLabel(layer: Layer): string {
   switch (layer) {
+    case 'override-file':
+      return 'vuln.yml'
     case 'workspace-file':
       return 'workspace'
     case 'user-file':

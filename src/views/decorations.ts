@@ -1,5 +1,6 @@
 import * as vscode from 'vscode'
 import { ScanCache, keyOf } from '../cache'
+import * as config from '../config'
 
 // Colors a lockfile in the Explorer by the worst severity its last scan found:
 // red for high/critical, orange for medium, blue for low/unknown.
@@ -30,6 +31,7 @@ export class LockfileDecorations implements vscode.FileDecorationProvider {
   }
 
   provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
+    if (config.isDisabled()) return undefined
     const entry = this.cache.peek(keyOf(uri))
     if (!entry || entry.findingCount === 0) return undefined
 

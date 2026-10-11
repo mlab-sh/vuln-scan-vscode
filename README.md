@@ -143,14 +143,25 @@ previous results and offers to open the token page or add a token.
 
 ## Settings
 
-Settings resolve through four layers, highest priority first:
+Settings resolve through five layers, highest priority first:
 
+0. `<workspace>/.mlab/vuln.yml`, a hand written override for this workspace
+   (flat `key: value` lines, never written by the extension)
 1. `<workspace>/.mlab/config.json`, meant to be committed so a team shares one
    configuration
 2. `~/.mlab/config.json`, personal and applying to every workspace
 3. VS Code settings under `mlab.*`, which is what earlier versions used and which
    keeps working
 4. built in defaults
+
+To turn the extension off in one workspace, put this in `.mlab/vuln.yml`:
+
+```yaml
+disable: true
+```
+
+No scans, no hovers, no lookups, and previous results are hidden (not deleted:
+remove the line and they come back).
 
 The mlab page shows which layer each value came from and lets you edit it, and
 the native settings editor stays one click away.

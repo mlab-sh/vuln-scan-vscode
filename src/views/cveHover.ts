@@ -25,7 +25,7 @@ export class CveHover implements vscode.HoverProvider {
     position: vscode.Position,
     token: vscode.CancellationToken,
   ): Promise<vscode.Hover | undefined> {
-    if (config.get('cveHover') !== true) return undefined
+    if (config.get('cveHover') !== true || config.isDisabled()) return undefined
     // Hovering triggers a request, so Restricted Mode stays quiet.
     if (!vscode.workspace.isTrusted) return undefined
 

@@ -25,7 +25,7 @@ export class AutoScanner {
   /** Start or stop watching to match the current `autoScan` setting. */
   sync(): void {
     if (this.disposed) return
-    const wanted = config.get('autoScan') === true
+    const wanted = config.get('autoScan') === true && !config.isDisabled()
     if (wanted && !this.watcher) this.start()
     else if (!wanted && this.watcher) this.stop()
   }
