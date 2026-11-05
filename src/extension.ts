@@ -18,8 +18,8 @@ import { IndicatorPanel } from './views/indicatorPanel'
 import { FindingPanel } from './views/findingPanel'
 import { locateLine } from './diagnosticsCore'
 import { Finding } from './api/types'
-import { lookup, scanDomain, webUrlFor, IndicatorError } from './api/indicator'
-import { clean, detectKind, isSupported, costsQuota, isActive, kindLabel, MAX_LENGTH } from './ioc'
+import { lookup, quotaLine, webUrlFor, IndicatorError } from './api/indicator'
+import { clean, detectKind, isSupported, costsQuota, opensInBrowser, kindLabel, MAX_LENGTH } from './ioc'
 import { AutoScanner } from './autoscan'
 import { dropGitIgnored } from './gitignore'
 import { LockfileDiagnostics } from './diagnostics'
@@ -516,9 +516,23 @@ async function analyzeSelection(): Promise<void> {
   }
 
   const kind = detectKind(value)
+  const base = String(config.get('platformUrl'))
+
+  // A domain is never scanned from here: a scan contacts the target and spends
+  // the organisation's quota. Its page on mlab.sh shows the latest report, or
+  // offers to start a scan, which the user then launches themselves.
+  if (opensInBrowser(kind)) {
+    const page = webUrlFor(new URL(base).origin, kind, value)
+    if (page) {
+      output.appendLine(`[ioc] ${kindLabel(kind)}: ${value} → opened ${page}`)
+      await vscode.env.openExternal(vscode.Uri.parse(page))
+    }
+    return
+  }
+
   if (!isSupported(kind)) {
     vscode.window.showInformationMessage(
-      `mlab: could not tell what "${truncateForMessage(value)}" is, so nothing was sent. Supported: URL, IP, email, file hash, MAC address.`,
+      `mlab: could not tell what "${truncateForMessage(value)}" is, so nothing was sent. Supported: URL, IP, email, file hash, MAC address, and domains (opened on mlab.sh).`,
     )
     return
   }
@@ -528,61 +542,29 @@ async function analyzeSelection(): Promise<void> {
 
   try {
     const key = await ctx.secrets.get(PLATFORM_KEY)
-    const quota = costsQuota(kind) ? ' (spends one daily lookup)' : ''
+    const quota = costsQuota(kind) ? ' (spends one lookup from the quota)' : ''
     output.appendLine(`[ioc] ${kindLabel(kind)}: ${value}${key ? ' (key)' : ' (anonymous)'}${quota}`)
 
-    const base = String(config.get('platformUrl'))
-    const report = isActive(kind)
-      ? // A domain is launched, polled, then read, and it contacts the target.
-        await vscode.window.withProgress(
-          {
-            location: vscode.ProgressLocation.Notification,
-            title: `mlab: scanning ${value}`,
-            cancellable: true,
-          },
-          async (progress, cancelToken) => {
-            const ctrl = new AbortController()
-            cancelToken.onCancellationRequested(() => ctrl.abort())
-            return scanDomain({
-              base,
-              domain: value,
-              key: key || undefined,
-              timeoutMs: config.get('timeoutMs'),
-              signal: ctrl.signal,
-              onState: (state) => {
-                if (state === 'reused') {
-                  output.appendLine(`[ioc] ${value}: reused an existing scan, no quota spent`)
-                }
-                progress.report({
-                  message:
-                    state === 'reused'
-                      ? 'reusing the existing scan'
-                      : state === 'done'
-                        ? 'collecting results'
-                        : `${state}…`,
-                })
-              },
-            })
-          },
-        )
-      : await lookup({
-          base,
-          kind,
-          value,
-          key: key || undefined,
-          timeoutMs: config.get('timeoutMs'),
-        })
+    const report = await lookup({
+      base,
+      kind,
+      value,
+      key: key || undefined,
+      timeoutMs: config.get('timeoutMs'),
+    })
 
     // Always offer the full result in a browser: the panel is a summary.
     report.webUrl = webUrlFor(new URL(base).origin, kind, value)
     panel.report(report)
-    output.appendLine(`[ioc] ${value}: ${report.findings.length} finding(s)`)
+    output.appendLine(
+      `[ioc] ${value}: ${report.findings.length} finding(s)${report.quota ? `, ${quotaLine(report.quota)}` : ''}`,
+    )
   } catch (err) {
     const message = err instanceof IndicatorError ? err.message : `Unexpected error: ${err}`
     output.appendLine(`[error] ${value}: ${message}`)
     panel.error(kind, value, message)
-    if (err instanceof IndicatorError && err.kind === 'rate-limit') {
-      const add = 'Add a platform key'
+    if (err instanceof IndicatorError && (err.kind === 'rate-limit' || err.kind === 'auth')) {
+      const add = err.kind === 'auth' ? 'Replace the platform key' : 'Add a platform key'
       const choice = await vscode.window.showWarningMessage(`mlab: ${message}`, add)
       if (choice === add) await HomePanel.show(ctx)
     } else {

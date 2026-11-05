@@ -2,7 +2,7 @@
   "name": "vuln-scan",
   "displayName": "mlab security",
   "description": "CVE scanning for your lockfiles, powered by mlab. Nothing is uploaded until you agree once; after that, changed lockfiles are rescanned automatically and results are cached per content.",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "publisher": "mlab-sh",
   "license": "MIT",
   "repository": {
@@ -250,7 +250,7 @@
         "mlab.analyzeSelection": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Offer **Analyze selection** in the editor context menu. Select a URL, IP, email, file hash or MAC address and look it up on the mlab platform. Only the selected value is sent, never the surrounding file."
+          "markdownDescription": "Offer **Analyze selection** in the editor context menu. Select a URL, IP, email, file hash or MAC address and look it up on the mlab platform; a domain opens its page on mlab.sh instead, where you can start a scan. Only the selected value is sent, never the surrounding file."
         },
         "mlab.apiUrl": {
           "type": "string",

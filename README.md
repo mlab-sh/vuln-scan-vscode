@@ -57,16 +57,18 @@ with a **Cancel** button, then the final report.
   makes triage possible: a critical at 0.02% EPSS and not exploited anywhere is
   not the same emergency as a high that CISA lists as under active attack. The
   report sorts by that, not by CVSS band alone.
-- **Analyze selection**: highlight a URL, IP, email, file hash, MAC address or
-  domain,
+- **Analyze selection**: highlight a URL, IP, email, file hash or MAC address,
   right-click, and get it looked up. What the value *is* gets worked out on your
   machine, so only the value itself is sent, and only to the endpoint for that
-  type. Works without a key at a reduced quota. Set `mlab.analyzeSelection` to
-  `false` to remove the menu entry. Every result carries a **See the full scan on
-  mlab** link. One caveat worth knowing: a domain is the only kind that contacts
-  the target rather than reading a database. It reuses an existing report when
-  there is one, and only spends one of your 25 daily organisation-wide scans when
-  there is genuinely nothing to reuse.
+  type. All five are passive lookups: nothing contacts the indicator itself.
+  Works without a key at a reduced quota; with a platform key, the panel shows
+  what is left of the quota (only IP lookups spend it, over a rolling 24 hours).
+  Set `mlab.analyzeSelection` to `false` to remove the menu entry. Every result
+  carries a **See the full scan on mlab** link.
+- **Domains open on mlab.sh**: selecting a domain opens its page on mlab.sh
+  instead of scanning from the editor. The page shows the latest report, or lets
+  you start a scan yourself. A domain scan contacts the target, so it is never
+  launched from a right-click.
 - **Hover any CVE identifier**, in any file, for its CVSS, EPSS, known-exploited
   status, risk score and weaknesses. Set `mlab.cveHover` to `false` to turn it
   off.

@@ -73,6 +73,38 @@ export interface IndicatorReport {
   verdict?: { label: string; tone: Tone }
   findings: IndicatorFinding[]
   facts: Fact[]
+  /** What is left of the key's quota, from the X-RateLimit-* headers. */
+  quota?: Quota
+}
+
+/** The platform quota as reported on a key call that spends it. */
+export interface Quota {
+  limit: number
+  remaining: number
+  /** What the quota counts, e.g. `ip`. */
+  resource?: string
+  /** Length of the rolling window, in seconds. */
+  windowSecs?: number
+}
+
+/** Read the X-RateLimit-* headers, or undefined when the call spent no quota. */
+export function readQuota(headers: { get(name: string): string | null }): Quota | undefined {
+  const limit = Number(headers.get('x-ratelimit-limit'))
+  const remaining = Number(headers.get('x-ratelimit-remaining'))
+  if (!headers.get('x-ratelimit-limit') || !Number.isFinite(limit) || !Number.isFinite(remaining)) return undefined
+  const window = Number(headers.get('x-ratelimit-window'))
+  return {
+    limit,
+    remaining,
+    resource: headers.get('x-ratelimit-resource') ?? undefined,
+    windowSecs: Number.isFinite(window) && window > 0 ? window : undefined,
+  }
+}
+
+/** One line for the panel and the output channel. */
+export function quotaLine(q: Quota): string {
+  const per = q.windowSecs === 86400 ? ' per rolling 24 h' : ''
+  return `${q.remaining} of ${q.limit}${q.resource ? ` ${q.resource}` : ''} lookups left${per}`
 }
 
 export class IndicatorError extends Error {
@@ -127,18 +159,14 @@ export async function lookup(req: LookupRequest): Promise<IndicatorReport> {
     req.signal?.removeEventListener('abort', onAbort)
   }
 
-  if (resp.status === 401 || resp.status === 403) {
-    throw new IndicatorError(
-      'The mlab platform key was rejected (or this lookup needs a plan that allows it).',
-      'auth',
-    )
-  }
-  if (resp.status === 429) {
-    throw new IndicatorError(
-      'Daily lookup quota reached. Adding an mlab platform key raises it.',
-      'rate-limit',
-      resp.headers.get('retry-after') ?? undefined,
-    )
+  if (resp.status === 401 || resp.status === 403 || resp.status === 429) {
+    let body: unknown
+    try {
+      body = await resp.json()
+    } catch {
+      body = undefined
+    }
+    throw errorFor(resp.status, body, Boolean(req.key), resp.headers.get('retry-after') ?? undefined)
   }
   if (!resp.ok) throw new IndicatorError(`Lookup failed: HTTP ${resp.status}.`, 'http')
 
@@ -148,162 +176,41 @@ export async function lookup(req: LookupRequest): Promise<IndicatorReport> {
   } catch {
     throw new IndicatorError('The platform returned a response that was not valid JSON.', 'bad-response')
   }
-  return summarize(req.kind, req.value, raw)
-}
-
-// ── Domain, which is a scan rather than a lookup ─────────────────────────────
-// Unlike the five direct lookups, a domain is launched, polled, then read. It
-// also contacts the target and spends a daily, organisation wide quota.
-
-export type DomainState = 'pending' | 'scanning' | 'done' | 'reused'
-
-async function getJson(
-  url: string,
-  key: string | undefined,
-  timeoutMs: number,
-  signal?: AbortSignal,
-  method: 'GET' | 'POST' = 'GET',
-  body?: unknown,
-): Promise<Record<string, unknown>> {
-  const ctrl = new AbortController()
-  const onAbort = () => ctrl.abort()
-  if (signal) {
-    if (signal.aborted) ctrl.abort()
-    else signal.addEventListener('abort', onAbort, { once: true })
-  }
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
-  try {
-    const headers: Record<string, string> = {}
-    if (key) headers.Authorization = `Bearer ${key}`
-    if (body !== undefined) headers['Content-Type'] = 'application/json'
-    const resp = await fetch(url, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: ctrl.signal,
-    })
-    if (resp.status === 429) {
-      throw new IndicatorError(
-        'Daily domain scan quota reached. Adding an mlab platform key raises it.',
-        'rate-limit',
-        resp.headers.get('retry-after') ?? undefined,
-      )
-    }
-    if (resp.status === 401 || resp.status === 403) {
-      throw new IndicatorError('The mlab platform key was rejected.', 'auth')
-    }
-    if (!resp.ok) throw new IndicatorError(`Domain scan failed: HTTP ${resp.status}.`, 'http')
-    return (await resp.json()) as Record<string, unknown>
-  } catch (err) {
-    if (err instanceof IndicatorError) throw err
-    throw new IndicatorError(
-      `Could not reach the mlab platform: ${err instanceof Error ? err.message : String(err)}`,
-      'network',
-    )
-  } finally {
-    clearTimeout(timer)
-    signal?.removeEventListener('abort', onAbort)
-  }
-}
-
-export interface DomainRequest {
-  base: string
-  domain: string
-  key?: string
-  timeoutMs: number
-  signal?: AbortSignal
-  /** Called between polls so the caller can show progress. */
-  onState?: (state: DomainState) => void
-}
-
-/** Read the state out of a status response. */
-export function readState(raw: Record<string, unknown>): DomainState {
-  const st = typeof raw.status === 'string' ? raw.status : ''
-  if (st === 'pending') return 'pending'
-  if (st === 'scanning') return 'scanning'
-  return 'done'
-}
-
-/** Gap before the next poll, growing so a long scan does not hammer the API. */
-export function pollDelay(attempt: number): number {
-  return Math.min(2000 + attempt * 1000, 8000)
-}
-
-export const MAX_POLLS = 40
-
-/** True when a results payload holds a finished scan we can reuse as is. */
-export function isCompleted(raw: Record<string, unknown>): boolean {
-  return raw.status === 'completed' && raw.results !== undefined && raw.results !== null
+  const report = summarize(req.kind, req.value, raw)
+  report.quota = req.key ? readQuota(resp.headers) : undefined
+  return report
 }
 
 /**
- * Existing results for a domain, or undefined when there are none to reuse.
+ * The error for a refused lookup, worded for someone who has to act on it.
  *
- * This is a plain GET and costs nothing, which is the whole point: `POST
- * /scan/domain` checks the quota and then purges and relaunches, so it spends
- * one of the daily scans even when a perfectly good recent scan already exists.
- * Reading first is free and usually enough.
+ * The platform answers 401 to a key it does not know: mistyped, revoked, or
+ * expired (keys expire after 90 days unless set otherwise). 403 means the key is
+ * valid but lacks the permission, and the server's own message names it. 429 is
+ * the quota, which refills over a rolling 24 hours.
  */
-export async function existingDomainScan(req: DomainRequest): Promise<IndicatorReport | undefined> {
-  const origin = req.base.replace(/\/+$/, '')
-  try {
-    const raw = await getJson(
-      `${origin}/scan/domain/results?domain=${encodeURIComponent(req.domain)}`,
-      req.key,
-      req.timeoutMs,
-      req.signal,
+export function errorFor(status: number, body: unknown, withKey: boolean, retryAfter?: string): IndicatorError {
+  const said =
+    body && typeof body === 'object' && typeof (body as Record<string, unknown>).error === 'string'
+      ? ((body as Record<string, unknown>).error as string)
+      : undefined
+  if (status === 401) {
+    return new IndicatorError(
+      withKey
+        ? 'The mlab platform key was not accepted: it is mistyped, revoked or expired (keys expire after 90 days by default). Create a new one in your organization settings on mlab.sh.'
+        : 'The mlab platform refused the anonymous lookup (401).',
+      'auth',
     )
-    return isCompleted(raw) ? summarize('domain', req.domain, raw) : undefined
-  } catch {
-    // No scan yet, or the read failed. Either way, fall through and launch one.
-    return undefined
   }
-}
-
-/**
- * Launch a domain scan, wait for it, and return the report.
- *
- * If a recent completed scan exists the platform answers immediately, so the
- * common case costs one request.
- */
-export async function scanDomain(req: DomainRequest): Promise<IndicatorReport> {
-  const origin = req.base.replace(/\/+$/, '')
-
-  // Reuse before spending. A launch always costs a daily scan; a read costs
-  // nothing, so ask whether the answer already exists.
-  const existing = await existingDomainScan(req)
-  if (existing) {
-    req.onState?.('reused')
-    return existing
+  if (status === 403) {
+    return new IndicatorError(said ?? 'The mlab platform key is not allowed to make this lookup.', 'auth')
   }
-
-  await getJson(`${origin}/scan/domain`, req.key, req.timeoutMs, req.signal, 'POST', {
-    domain: req.domain,
-  })
-
-  const statusUrl = `${origin}/scan/domain/status?domain=${encodeURIComponent(req.domain)}`
-  for (let i = 0; i < MAX_POLLS; i++) {
-    if (req.signal?.aborted) throw new IndicatorError('Domain scan cancelled.', 'network')
-    const status = await getJson(statusUrl, req.key, req.timeoutMs, req.signal)
-    const state = readState(status)
-    req.onState?.(state)
-    if (state === 'done') break
-    await new Promise((r) => setTimeout(r, pollDelay(i)))
-    if (i === MAX_POLLS - 1) {
-      throw new IndicatorError(
-        'The domain scan is still running. Open it on mlab to follow it there.',
-        'timeout',
-      )
-    }
-  }
-
-  const results = await getJson(
-    `${origin}/scan/domain/results?domain=${encodeURIComponent(req.domain)}`,
-    req.key,
-    req.timeoutMs,
-    req.signal,
+  const base = said && said !== 'limit' ? said.replace(/\.?$/, '.') : 'Lookup quota reached.'
+  return new IndicatorError(
+    `${base} The quota refills over a rolling 24 hours${withKey ? '' : '; an mlab platform key raises it'}.`,
+    'rate-limit',
+    retryAfter,
   )
-  return summarize('domain', req.domain, results)
 }
 
 // ── Normalisation ────────────────────────────────────────────────────────────
@@ -399,39 +306,6 @@ export function summarize(
     push('Reverse DNS', s(rdns?.name) ?? s(rdns?.ptr), true)
     const rdap = raw.rdap as Record<string, unknown> | undefined
     push('Abuse contact', s(rdap?.abuse_email), true)
-  }
-
-  if (kind === 'domain') {
-    // The payload is an envelope: { domain, scan_date, status, results: {...} }.
-    const res = (raw.results ?? {}) as Record<string, unknown>
-    const dns = (res.dns ?? {}) as Record<string, unknown>
-    const txt = (dns.txt ?? {}) as Record<string, unknown>
-    const files = (res.files ?? {}) as Record<string, unknown>
-
-    const suspicious = Array.isArray(res.subdomains_suspicious) ? res.subdomains_suspicious : []
-    const subdomains = Array.isArray(res.subdomains) ? res.subdomains : []
-    const ssl = Array.isArray(res.ssl) ? res.ssl : []
-
-    if (suspicious.length) {
-      verdict = {
-        label: `${suspicious.length} suspicious subdomain${suspicious.length === 1 ? '' : 's'}`,
-        tone: 'warn',
-      }
-    }
-
-    push('Scanned', s(raw.scan_date))
-    const resolve = Array.isArray(dns.resolve) ? (dns.resolve[0] as Record<string, unknown>) : undefined
-    const a = Array.isArray(resolve?.a) ? (resolve!.a as string[]) : []
-    const aaaa = Array.isArray(resolve?.aaaa) ? (resolve!.aaaa as string[]) : []
-    push('A records', a.join(', ') || undefined, true)
-    push('AAAA records', aaaa.join(', ') || undefined, true)
-    push('SPF', s(txt.spf) ? 'present' : 'absent')
-    push('DMARC', s(txt.dmarc) ? 'present' : 'absent')
-    push('DKIM', Array.isArray(txt.dkim) && txt.dkim.length ? 'present' : 'absent')
-    push('Subdomains', subdomains.length ? String(subdomains.length) : undefined)
-    if (suspicious.length) push('Suspicious', (suspicious as string[]).join(', '), true)
-    push('security.txt', s(files.security_txt) === 'not found' ? 'not found' : 'present')
-    push('SSL issues', ssl.length ? String(ssl.length) : 'none')
   }
 
   return { kind, value, verdict, findings: readFindings(raw), facts }

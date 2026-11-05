@@ -403,7 +403,7 @@ export class HomePanel {
     <h2>Platform key</h2>
     <p class="muted">A <strong>separate credential</strong> from the scan token above: that one is for
       lockfile scans on vuln.mlab.sh, this one is for indicator lookups on the mlab platform
-      (<em>Analyze selection</em>). Indicator lookups work without it at a reduced daily quota; a key
+      (<em>Analyze selection</em>). Indicator lookups work without it at a reduced quota; a key
       raises the quota and unlocks the richer enrichment.</p>
     <div class="status ${hasPlatform ? 'ok' : 'anon'}">
       <span class="dot"></span>

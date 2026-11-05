@@ -1,7 +1,7 @@
 import * as vscode from 'vscode'
 import { mlabCss } from './theme'
 import { esc } from './reportHtml'
-import { IndicatorReport, worstSeverity } from '../api/indicator'
+import { IndicatorReport, quotaLine, worstSeverity } from '../api/indicator'
 import { IndicatorKind, kindLabel } from '../ioc'
 
 // Result panel for a single analysed indicator.
@@ -144,7 +144,9 @@ function bodyHtml(r: IndicatorReport): string {
         ? `<div class="actions"><a class="btn" href="${esc(r.webUrl)}">See the full scan on mlab</a></div>`
         : ''
     }
-    <footer class="muted small">Looked up on the mlab platform. Only the value above was sent.</footer>`
+    <footer class="muted small">Looked up on the mlab platform. Only the value above was sent.${
+      r.quota ? ` ${esc(quotaLine(r.quota))}.` : ''
+    }</footer>`
 }
 
 const STYLE = `

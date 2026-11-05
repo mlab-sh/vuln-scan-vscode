@@ -50,8 +50,8 @@ export function detectKind(value: string): IndicatorKind {
   if (RE.ipv4.test(v)) return 'ip'
   if (v.includes(':') && RE.ipv6.test(v) && v.split(':').length >= 3) return 'ip'
   // A domain needs a non-numeric last label. Without this, a malformed address
-  // like 256.0.0.1 is a syntactically valid domain name and would be sent to a
-  // domain scan, when what the user actually selected was a broken IP.
+  // like 256.0.0.1 is a syntactically valid domain name and would open a domain
+  // page, when what the user actually selected was a broken IP.
   if (RE.domain.test(v) && /[^0-9]/.test(v.split('.').pop() ?? '')) return 'domain'
   return 'unknown'
 }
@@ -76,27 +76,27 @@ export function kindLabel(kind: IndicatorKind): string {
   }
 }
 
-/**
- * Kinds this extension can look up.
- *
- * `domain` is here but is not a lookup: it launches a scan that contacts the
- * target and has to be polled, and it spends a daily quota. See `scanDomain`.
- */
-export const SUPPORTED_KINDS: IndicatorKind[] = ['ip', 'url', 'email', 'hash', 'mac', 'domain']
-
-/** Kinds that reach out and touch the target rather than reading a database. */
-export const ACTIVE_KINDS: IndicatorKind[] = ['domain']
-
-export function isActive(kind: IndicatorKind): boolean {
-  return ACTIVE_KINDS.includes(kind)
-}
+/** Kinds this extension looks up in place. All five are passive: they read a database. */
+export const SUPPORTED_KINDS: IndicatorKind[] = ['ip', 'url', 'email', 'hash', 'mac']
 
 export function isSupported(kind: IndicatorKind): boolean {
   return SUPPORTED_KINDS.includes(kind)
 }
 
-/** Kinds that spend a daily, organisation wide quota when looked up. */
-export const QUOTA_KINDS: IndicatorKind[] = ['ip', 'domain']
+/**
+ * Kinds that are never scanned from the editor: the action opens their page on
+ * mlab.sh instead, where the user starts the scan themselves. A domain scan
+ * contacts the target and spends the organisation's scan quota, which is not
+ * something a right-click on a string in a file should do.
+ */
+export const BROWSER_KINDS: IndicatorKind[] = ['domain']
+
+export function opensInBrowser(kind: IndicatorKind): boolean {
+  return BROWSER_KINDS.includes(kind)
+}
+
+/** Kinds whose lookup spends the platform quota (rolling 24 h). */
+export const QUOTA_KINDS: IndicatorKind[] = ['ip']
 
 export function costsQuota(kind: IndicatorKind): boolean {
   return QUOTA_KINDS.includes(kind)

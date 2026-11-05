@@ -5,21 +5,20 @@ import {
   detectKind,
   isSupported,
   costsQuota,
+  opensInBrowser,
   SUPPORTED_KINDS,
   IndicatorKind,
 } from '../src/ioc'
 import {
   endpointFor,
-  isCompleted,
-  scanDomain,
+  errorFor,
+  lookup,
+  quotaLine,
+  readQuota,
   summarize,
   worstSeverity,
   webUrlFor,
-  readState,
-  pollDelay,
-  MAX_POLLS,
 } from '../src/api/indicator'
-import { isActive } from '../src/ioc'
 
 // ── Cleaning a selection ─────────────────────────────────────────────────────
 
@@ -79,7 +78,7 @@ test('a bare MAC is not mistaken for a short hash', () => {
 
 test('a malformed address is unknown, not silently treated as a domain', () => {
   // These parse as syntactically valid domain names, but nobody selecting them
-  // means a domain, and a domain scan spends quota. Refuse instead.
+  // means a domain, and opening a page for a broken IP helps no one. Refuse instead.
   for (const v of ['999.1.1.1', '1.2.3', '256.0.0.1', '8.8.8.256']) {
     assert.equal(detectKind(v), 'unknown', `${v} should not be classified`)
   }
@@ -93,24 +92,18 @@ test('nonsense is unknown rather than guessed at', () => {
   }
 })
 
-test('the direct lookups each have a GET route; the domain does not, by design', () => {
+test('the five lookups each have a GET route; a domain has none, by design', () => {
   for (const k of ['ip', 'url', 'email', 'hash', 'mac'] as IndicatorKind[]) {
     assert.ok(endpointFor('https://mlab.sh/api/v1', k, 'x'), `${k} should have a route`)
     assert.ok(isSupported(k))
-    assert.equal(isActive(k), false, `${k} reads a database, it does not touch anyone`)
+    assert.equal(opensInBrowser(k), false, `${k} is looked up in place`)
   }
-  // A domain is supported but goes through launch, poll and read instead.
-  assert.ok(isSupported('domain'))
+  // A domain is never scanned from the editor: its page on mlab.sh is opened.
+  assert.equal(isSupported('domain'), false)
+  assert.equal(opensInBrowser('domain'), true)
   assert.equal(endpointFor('https://mlab.sh/api/v1', 'domain', 'x'), undefined)
-  assert.equal(isActive('domain'), true, 'a domain scan contacts the target')
   assert.equal(isSupported('unknown'), false)
-})
-
-test('every supported kind is either a direct lookup or an active scan', () => {
-  for (const k of SUPPORTED_KINDS) {
-    const direct = endpointFor('https://mlab.sh/api/v1', k, 'x') !== undefined
-    assert.notEqual(direct, isActive(k), `${k} must be exactly one of the two`)
-  }
+  assert.equal(opensInBrowser('unknown'), false)
 })
 
 // ── Seeing the full result on mlab ───────────────────────────────────────────
@@ -129,7 +122,13 @@ test('the URL page takes its value as a query, the others as a path', () => {
     'https://mlab.sh/url?q=https%3A%2F%2Fexample.com%2Fa%20b',
   )
   assert.equal(webUrlFor('https://mlab.sh', 'ip', '8.8.8.8'), 'https://mlab.sh/ip/8.8.8.8')
+})
+
+test('a domain opens its page, which shows the report or offers to start a scan', () => {
+  // /domain/<name> on mlab.sh: the latest report when there is one, otherwise a
+  // page with a button the user presses to launch the scan. Nothing starts on open.
   assert.equal(webUrlFor('https://mlab.sh', 'domain', 'example.com'), 'https://mlab.sh/domain/example.com')
+  assert.equal(webUrlFor('https://mlab.internal:8443/', 'domain', 'a.test'), 'https://mlab.internal:8443/domain/a.test')
 })
 
 test('values that need escaping are escaped', () => {
@@ -140,29 +139,10 @@ test('values that need escaping are escaped', () => {
   assert.equal(webUrlFor('https://mlab.sh/', 'ip', '::1'), 'https://mlab.sh/ip/%3A%3A1')
 })
 
-// ── Domain polling ───────────────────────────────────────────────────────────
-
-test('the scan states are read from the status payload', () => {
-  assert.equal(readState({ status: 'pending' }), 'pending')
-  assert.equal(readState({ status: 'scanning' }), 'scanning')
-  assert.equal(readState({ status: 'completed' }), 'done')
-  assert.equal(readState({}), 'done', 'anything unrecognised means stop polling')
-})
-
-test('polling backs off but stays bounded', () => {
-  assert.ok(pollDelay(1) > pollDelay(0), 'the gap grows')
-  assert.ok(pollDelay(100) <= 8000, 'and is capped')
-  // The worst case wait has to stay sane rather than run for an hour.
-  let total = 0
-  for (let i = 0; i < MAX_POLLS; i++) total += pollDelay(i)
-  assert.ok(total <= 5 * 60 * 1000, `worst case ${total} ms should stay under five minutes`)
-})
-
-test('only IP and domain spend a daily quota', () => {
+test('only an IP lookup spends the quota', () => {
   assert.equal(costsQuota('ip'), true)
-  assert.equal(costsQuota('domain'), true)
-  for (const k of ['url', 'email', 'hash', 'mac'] as IndicatorKind[]) {
-    assert.equal(costsQuota(k), false, `${k} is documented as free`)
+  for (const k of ['url', 'email', 'hash', 'mac', 'domain'] as IndicatorKind[]) {
+    assert.equal(costsQuota(k), false, `${k} spends nothing from the editor`)
   }
 })
 
@@ -257,136 +237,86 @@ test('a malformed findings array does not crash the normaliser', () => {
   assert.equal(r.findings[0].severity, 'info', 'a missing severity defaults rather than throwing')
 })
 
-// ── Reusing a domain scan instead of spending a daily one ────────────────────
+// ── Errors and quota ─────────────────────────────────────────────────────────
 
-test('a completed payload is reusable, anything else is not', () => {
-  assert.equal(isCompleted({ status: 'completed', results: { dns: {} } }), true)
-  // Both halves matter: a scan in progress can already carry partial results,
-  // and a completed record can carry none.
-  assert.equal(isCompleted({ status: 'pending', results: { dns: {} } }), false, 'still running')
-  assert.equal(isCompleted({ status: 'scanning', results: { dns: {} } }), false)
-  assert.equal(isCompleted({ status: 'completed', results: null }), false, 'no results to reuse')
-  assert.equal(isCompleted({ status: 'failed' }), false)
-  assert.equal(isCompleted({}), false)
+test('a 401 with a key says why a key stops working and where to get a new one', () => {
+  const e = errorFor(401, { error: 'Unauthorized' }, true)
+  assert.equal(e.kind, 'auth')
+  assert.match(e.message, /revoked or expired/)
+  assert.match(e.message, /90 days/)
+  assert.doesNotMatch(errorFor(401, undefined, false).message, /90 days/, 'no key, nothing expired')
 })
 
-/** Record every request so a test can assert what was and was not called. */
-function stubFetch(handler: (url: string, init?: { method?: string }) => unknown) {
-  const calls: Array<{ url: string; method: string }> = []
+test('a 403 shows the server message, which names the missing permission', () => {
+  const said = "This API key does not have the 'scan.lookup' permission (Lookups)."
+  assert.equal(errorFor(403, { error: said }, true).message, said)
+  assert.equal(errorFor(403, 'not json', true).kind, 'auth')
+})
+
+test('a 429 keeps the server message and explains the rolling window', () => {
+  const e = errorFor(429, { error: 'IP lookup limit reached. Please try again later.' }, true, '3600')
+  assert.equal(e.kind, 'rate-limit')
+  assert.equal(e.retryAfter, '3600')
+  assert.match(e.message, /^IP lookup limit reached/)
+  assert.match(e.message, /rolling 24 hours/)
+  assert.doesNotMatch(e.message, /raises it/, 'a key holder is not told to add a key')
+  assert.match(errorFor(429, undefined, false).message, /platform key raises it/)
+})
+
+function headers(h: Record<string, string>) {
+  return { get: (n: string) => h[n.toLowerCase()] ?? null }
+}
+
+test('the quota is read from the X-RateLimit headers', () => {
+  const q = readQuota(
+    headers({
+      'x-ratelimit-limit': '500',
+      'x-ratelimit-remaining': '497',
+      'x-ratelimit-resource': 'ip',
+      'x-ratelimit-window': '86400',
+    }),
+  )
+  assert.deepEqual(q, { limit: 500, remaining: 497, resource: 'ip', windowSecs: 86400 })
+  assert.equal(quotaLine(q!), '497 of 500 ip lookups left per rolling 24 h')
+  assert.equal(readQuota(headers({})), undefined, 'a call that spends nothing has no quota')
+  assert.equal(readQuota(headers({ 'x-ratelimit-limit': 'x', 'x-ratelimit-remaining': '1' })), undefined)
+})
+
+function stubResponse(status: number, body: unknown, h: Record<string, string> = {}) {
   const original = globalThis.fetch
-  // Types derived from `fetch` itself: this project compiles without the DOM
-  // lib, so RequestInfo and friends are not in scope.
-  type Args = Parameters<typeof fetch>
-  globalThis.fetch = (async (input: Args[0], init?: Args[1]) => {
-    const url = String(input)
-    calls.push({ url, method: init?.method ?? 'GET' })
+  const calls: string[] = []
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+    calls.push(String(input))
     return {
-      ok: true,
-      status: 200,
-      headers: { get: () => null },
-      json: async () => handler(url, init),
+      ok: status >= 200 && status < 300,
+      status,
+      headers: headers(h),
+      json: async () => body,
     } as unknown as Response
   }) as typeof fetch
   return { calls, restore: () => { globalThis.fetch = original } }
 }
 
-const COMPLETED = {
-  domain: 'example.com',
-  status: 'completed',
-  scan_date: '2026-08-30 16:43:11 UTC',
-  results: { subdomains: [], subdomains_suspicious: [] },
-}
-
-test('an existing completed scan is reused, and no scan is launched', async () => {
-  // This is the whole point: POST spends one of 25 daily organisation scans,
-  // the results read costs nothing.
-  const f = stubFetch(() => COMPLETED)
+test('a keyed IP lookup carries its quota into the report', async () => {
+  const f = stubResponse(200, { org: 'Google' }, { 'x-ratelimit-limit': '10', 'x-ratelimit-remaining': '9' })
   try {
-    const states: string[] = []
-    const r = await scanDomain({
-      base: 'https://mlab.sh/api/v1',
-      domain: 'example.com',
-      timeoutMs: 5000,
-      onState: (st) => states.push(st),
-    })
-    assert.equal(r.kind, 'domain')
-    assert.deepEqual(states, ['reused'])
-    assert.deepEqual(
-      f.calls.map((c) => c.method),
-      ['GET'],
-      'exactly one request, and it must not be the POST that spends quota',
-    )
-    assert.ok(f.calls[0].url.includes('/scan/domain/results'))
+    const r = await lookup({ base: 'https://mlab.sh/api/v1', kind: 'ip', value: '8.8.8.8', key: 'k', timeoutMs: 1000 })
+    assert.equal(r.quota?.remaining, 9)
+    assert.equal(f.calls.length, 1)
+    assert.ok(f.calls[0].endsWith('/scan/ip?ip=8.8.8.8'))
   } finally {
     f.restore()
   }
 })
 
-test('with no usable scan, one is launched and then polled', async () => {
-  let readCount = 0
-  const f = stubFetch((url) => {
-    if (url.includes('/scan/domain/results')) {
-      readCount++
-      // First read: nothing usable yet. Second read: the finished report.
-      return readCount === 1 ? { status: 'pending', results: null } : COMPLETED
-    }
-    if (url.includes('/scan/domain/status')) return { status: 'completed' }
-    return { status: 'started' }
-  })
+test('a refused lookup reaches the caller as the mapped error', async () => {
+  const f = stubResponse(401, { error: 'Unauthorized' })
   try {
-    const r = await scanDomain({
-      base: 'https://mlab.sh/api/v1',
-      domain: 'example.com',
-      timeoutMs: 5000,
-    })
-    assert.equal(r.kind, 'domain')
-    assert.ok(
-      f.calls.some((c) => c.method === 'POST' && c.url.endsWith('/scan/domain')),
-      'a scan must actually be launched when there is nothing to reuse',
+    await assert.rejects(
+      lookup({ base: 'https://mlab.sh/api/v1', kind: 'hash', value: 'a'.repeat(64), key: 'old', timeoutMs: 1000 }),
+      (e: Error & { kind?: string }) => e.kind === 'auth' && /expired/.test(e.message),
     )
   } finally {
     f.restore()
   }
-})
-
-test('the domain summary reads the real envelope, not a flat payload', () => {
-  // Captured from the live endpoint: the data sits under `results`, not at the top.
-  const r = summarize('domain', 'badssl.com', {
-    domain: 'badssl.com',
-    status: 'completed',
-    scan_date: '2026-08-30 16:43:11.682 UTC',
-    results: {
-      dns: {
-        resolve: [{ a: ['104.154.89.105'], aaaa: [], cname: null, domain: 'badssl.com' }],
-        txt: { dkim: [], dmarc: null, raw: ['x'], spf: null },
-      },
-      files: { robots_txt: 'User-agent: *', security_txt: 'not found' },
-      ssl: [],
-      subdomains: ['revoked.badssl.com'],
-      subdomains_suspicious: [],
-    },
-  })
-  const fact = (l: string) => r.facts.find((f) => f.label === l)?.value
-  assert.equal(fact('Scanned'), '2026-08-30 16:43:11.682 UTC')
-  assert.equal(fact('A records'), '104.154.89.105')
-  assert.equal(fact('SPF'), 'absent')
-  assert.equal(fact('DMARC'), 'absent')
-  assert.equal(fact('Subdomains'), '1')
-  assert.equal(fact('security.txt'), 'not found')
-  assert.equal(r.verdict, undefined, 'no suspicious subdomains means no warning')
-})
-
-test('suspicious subdomains raise a warning verdict', () => {
-  const r = summarize('domain', 'x.test', {
-    status: 'completed',
-    results: { subdomains: ['a', 'b'], subdomains_suspicious: ['login-x.test'] },
-  })
-  assert.equal(r.verdict?.tone, 'warn')
-  assert.ok(r.verdict?.label.includes('1 suspicious subdomain'))
-  assert.equal(r.facts.find((f) => f.label === 'Suspicious')?.value, 'login-x.test')
-})
-
-test('a domain payload missing every section does not throw', () => {
-  assert.doesNotThrow(() => summarize('domain', 'x.test', {}))
-  assert.doesNotThrow(() => summarize('domain', 'x.test', { results: {} }))
 })
